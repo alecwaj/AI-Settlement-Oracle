@@ -20,6 +20,15 @@ const aiResolver = new AIResolver();
 const DEMO_PRIVATE_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' as Hex;
 const signer = new AttestationSigner(DEMO_PRIVATE_KEY);
 
+// Pre-populate demo market
+const DEMO_MARKET: Market = {
+  id: 'demo-nasa-astrobiology-2025',
+  question: 'Will NASA find definitive evidence of extraterrestrial life in 2025?',
+  resolutionCriteria: 'Resolves YES if NASA officially announces discovery of living organisms, fossilized life, or unambiguous biosignatures from beyond Earth. Resolves NO if only precursor molecules (amino acids, organic compounds) are found, as these indicate potential for life but are not life itself.',
+  resolutionTime: Date.now(),
+};
+markets.set(DEMO_MARKET.id, DEMO_MARKET);
+
 // Health check
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', signer: signer.getAddress() });
@@ -71,12 +80,14 @@ app.get('/markets/:id', (req, res) => {
 
 // Resolve a market using AI
 app.post('/markets/:id/resolve', async (req, res) => {
-  const market = markets.get(req.params.id);
+  const marketId = req.params.id;
+  const market = markets.get(marketId);
+  
   if (!market) {
     return res.status(404).json({ error: 'Market not found' });
   }
 
-  if (resolutions.has(req.params.id)) {
+  if (resolutions.has(marketId)) {
     return res.status(400).json({ error: 'Market already resolved' });
   }
 
@@ -84,13 +95,13 @@ app.post('/markets/:id/resolve', async (req, res) => {
     const result = await aiResolver.resolve(market);
     
     const resolution: Resolution = {
-      marketId: market.id,
+      marketId: market.id as `0x${string}`,
       outcome: result.outcomeHash,
       timestamp: BigInt(result.timestamp),
       reasoning: result.reasoning,
     };
 
-    resolutions.set(req.params.id, resolution);
+    resolutions.set(marketId, resolution);
 
     res.json({
       success: true,
@@ -193,4 +204,5 @@ const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`🔮 AI Settlement Oracle running on port ${PORT}`);
   console.log(`🔑 Signer address: ${signer.getAddress()}`);
+  console.log(`📊 Demo market loaded: NASA Astrobiology 2025`);
 });
