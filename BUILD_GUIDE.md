@@ -27,14 +27,10 @@ ai-settlement-oracle/
 │   └── tsconfig.json
 ├── demo/                   # React frontend (Vite)
 │   ├── src/
-│   │   ├── components/
-│   │   │   ├── MarketDetail.tsx     # Market view + resolution
-│   │   │   ├── MarketForm.tsx       # Create market
-│   │   │   └── MarketList.tsx       # List all markets
-│   │   ├── App.tsx
-│   │   ├── types.ts
-│   │   └── wagmi.ts
-│   ├── public/
+│   │   ├── App.tsx                  # Single-page demo
+│   │   ├── index.css                # Styles + animations
+│   │   ├── main.tsx
+│   │   └── types.ts
 │   ├── index.html
 │   └── package.json
 ├── shared/                 # Shared types/interfaces
@@ -75,34 +71,16 @@ cd ../oracle && npm install
 cd ../demo && npm install
 ```
 
-### 2. Start Local Chain
-
-```bash
-cd contracts
-anvil
-```
-
-Keep this terminal running. Anvil creates a local Ethereum node with test accounts.
-
-### 3. Deploy Contracts
-
-```bash
-cd contracts
-forge script script/Deploy.s.sol --rpc-url http://localhost:8545 --broadcast --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
-```
-
-Copy the deployed contract address for the frontend.
-
-### 4. Start Oracle Service
+### 2. Start Oracle Service
 
 ```bash
 cd oracle
 npm run dev
 ```
 
-Oracle runs on `http://localhost:3001`.
+Oracle runs on `http://localhost:3001`. The demo market (NASA astrobiology) is pre-loaded.
 
-### 5. Start Demo Frontend
+### 3. Start Demo Frontend
 
 ```bash
 cd demo
@@ -115,64 +93,92 @@ Open `http://localhost:5173` in your browser.
 
 ## Demo Walkthrough
 
-The demo showcases a **verifiable AI oracle** resolving prediction markets with cryptographic attestations.
+The demo showcases a **verifiable AI oracle** resolving a single thought-provoking prediction market with a 20-second animated visualization.
 
-### Demo Scenario: Ambiguous Market Resolution
+### Demo Market: NASA Astrobiology
 
-**Market Question:** "Will Ethereum trade above $4,000 by December 31, 2024?"
+**Question:** "Will NASA find definitive evidence of extraterrestrial life in 2025?"
 
-**Resolution Criteria:** "Based on Coinbase daily close price. If price is exactly $4,000, resolves NO."
+**Resolution Criteria:** 
+> Resolves YES if NASA officially announces discovery of living organisms, fossilized life, or unambiguous biosignatures from beyond Earth. Resolves NO if only precursor molecules (amino acids, organic compounds) are found, as these indicate potential for life but are not life itself.
 
 ### Demo Flow
 
-#### Step 1: Create Market
+#### Step 1: View the Market
 
-1. Click **"Create Market"** tab
-2. Enter question and resolution criteria
-3. Set resolution time (use a past date for immediate testing)
-4. Submit — market appears in list
+- Single market card displayed on page load
+- Shows question and resolution criteria
+- Status: "Pending Resolution"
 
-#### Step 2: View Market Detail
+#### Step 2: Trigger Resolution
 
-1. Click on market in list
-2. See market details:
-   - Question
-   - Resolution criteria
-   - Resolution time
-   - Current status: **PENDING**
+Click **"Resolve with Verifiable AI"** button.
 
-#### Step 3: Trigger AI Resolution
+#### Step 3: Watch the Processing Animation (20 seconds)
 
-1. Click **"Resolve with AI"**
-2. Oracle service processes:
-   - Analyzes market question
-   - Generates deterministic outcome (YES/NO/INVALID)
-   - Calculates confidence score
-   - Produces reasoning text
-   - Gathers mock evidence
-3. UI updates with:
-   - **Outcome:** YES/NO/INVALID
-   - **Confidence:** 75.3% (example)
-   - **Reasoning:** Full AI explanation
-   - **Evidence:** Simulated data sources
+Visual network representation of the oracle operating:
 
-#### Step 4: Create Cryptographic Attestation
+**Network Nodes (left to right):**
+- **News Sources** (3 nodes) — Guardian, GDELT, other APIs
+- **Analysis Nodes** (2 nodes) — Evidence evaluation, semantic analysis
+- **Verification Node** — Cryptographic hashing
+- **Oracle Node** — Final determination
 
-1. Click **"Create Attestation"**
-2. Oracle signs resolution with EIP-712:
-   - Structured data: marketId, outcome, timestamp, reasoning hash
-   - Cryptographic signature generated
-   - Signer address recorded
-3. UI displays:
-   - **Signer:** 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-   - **Signature:** 0x7f8d9... (truncated)
-   - **Full attestation:** JSON view of signed data
+**Animation Sequence:**
+1. News source nodes light up sequentially
+2. Connection lines pulse with data flow
+3. Data packets travel through the network
+4. Analysis nodes activate
+5. Verification badges appear:
+   - ✓ Sources Verified
+   - ✓ Evidence Hashed
+   - ✓ Attestation Signed
+6. Progress bar fills
+7. Phase text updates:
+   - "Querying news sources..."
+   - "Analyzing evidence quality..."
+   - "Evaluating semantic criteria..."
+   - "Computing confidence score..."
+   - "Generating cryptographic attestation..."
 
-#### Step 5: Verify On-Chain (Optional)
+#### Step 4: View the Result
 
-1. Copy attestation data
-2. Use contract's `verifyAttestation()` function
-3. Confirmation: signature valid, signer authorized
+**Outcome:** NO
+**Confidence:** 92%
+
+**Reasoning displayed:**
+> Analysis of 2025 NASA discoveries regarding extraterrestrial life:
+> 
+> **KEY FINDING:** NASA's OSIRIS-REx mission reported the discovery of amino acids on the asteroid Bennu in 2025. However, amino acids are precursor molecules to life — they represent the building blocks from which life can emerge, but are not themselves evidence of living organisms.
+> 
+> **RESOLUTION CRITERIA ANALYSIS:**
+> - The market criteria explicitly distinguishes between "living organisms, fossilized life, or unambiguous biosignatures" (which would resolve YES) and "precursor molecules" (which resolve NO)
+> - Amino acids fall under the category of precursor molecules
+> - No definitive evidence of actual extraterrestrial life was announced by NASA in 2025
+> 
+> **CONCLUSION:** While the amino acid discovery is scientifically significant, it does not meet the threshold for "definitive evidence of extraterrestrial life" as specified in the market criteria.
+
+#### Step 5: View Cryptographic Verification
+
+Click **"View Cryptographic Verification"** to expand:
+
+**Attestation Details:**
+- Signer Address
+- Signature (truncated)
+- Outcome Hash
+- Timestamp
+
+**Information Sanctity:**
+- **Cryptographic Binding:** The attestation cryptographically binds the market ID, outcome, and reasoning to a specific timestamp and signer
+- **Non-Repudiation:** The EIP-712 signature proves the oracle operator made this specific determination at this specific time
+- **Verifiable Execution:** Anyone can verify this attestation on-chain using the smart contract's `verifyAttestation()` function
+- **Evidence Integrity:** While this demo uses simulated evidence, production deployments hash and timestamp all source material
+
+**Evidence Sources (Simulated):**
+- NASA OSIRIS-REx Mission Results (2025)
+- NASA Astrobiology Research Papers
+- Scientific Literature on precursor molecules
+- Market Criteria Analysis
 
 ---
 
@@ -180,60 +186,61 @@ The demo showcases a **verifiable AI oracle** resolving prediction markets with 
 
 ### Visual Design
 
-- **Dark theme** with purple/blue accents
-- **Clean, minimal UI** — no visual overload
-- **Card-based layout** for markets
-- **Status badges:** Pending (gray), Resolved (green), Delayed (yellow)
+- **Dark theme** with purple/blue gradients (#667eea to #764ba2)
+- **Glass-morphism** cards with backdrop blur
+- **Animated SVG network** showing data flow
+- **Pulsing nodes** and gradient connection lines
+- **Clean, minimal UI** — single market, focused flow
 
-### Key Screens
+### Animation Details
 
-| Screen | Purpose |
-|--------|---------|
-| Market List | Browse all markets, filter by status |
-| Market Detail | View question, trigger resolution, see results |
-| Resolution View | Outcome, confidence, reasoning, evidence |
-| Attestation View | Cryptographic proof of AI decision |
-| Create Market | Form for new prediction markets |
+| Element | Description |
+|---------|-------------|
+| Nodes | Circles that light up (blue → green) when activated |
+| Connections | Gradient lines that pulse with data flow |
+| Data Packets | Small circles that travel along connections |
+| Progress Bar | Linear gradient fill with glow effect |
+| Badges | Status pills that turn green when verified |
 
-### Resolution States
+### Technical Implementation
 
-```
-PENDING → [AI Resolve] → RESOLVED (with attestation)
-   ↓
-DELAYED_FOR_EVIDENCE → [Retry] → RESOLVED or PAUSED
-```
+- **20-second fixed duration** — ensures visual completeness
+- **Phase synchronization** — text updates match visual progress
+- **Deterministic outcome** — same market always resolves NO with 92% confidence
+- **EIP-712 attestation** — generated automatically after resolution
 
 ---
 
 ## What the Demo Shows
 
-### 1. Verifiable AI Decisions
+### 1. Long-Tail Prediction Markets
+- Complex, ambiguous questions requiring nuanced analysis
+- Semantic understanding of resolution criteria
+- Distinction between related concepts (precursors vs. life itself)
+
+### 2. Verifiable AI Decisions
 - Every resolution produces a cryptographic attestation
 - EIP-712 structured data signing
 - On-chain verifiable
+- Transparent reasoning
 
-### 2. Confidence Scoring
-- AI returns confidence 0.0-1.0
-- Below threshold → delayed for more evidence
-- Transparent reasoning shown to users
+### 3. Visual Trust Building
+- Users see the oracle "working" — not a black box
+- Network visualization shows data sources and processing
+- Verification badges create confidence
 
-### 3. Evidence Chain
-- Mock evidence sources (Coinbase API, timestamps)
-- In production: The Guardian, GDELT news APIs
-- Each source hashed and timestamped
-
-### 4. Delay Mechanism
-- Ambiguous markets don't get forced resolutions
-- Automatic retry with countdown
-- Manual override after max retries
+### 4. Information Sanctity
+- Cryptographic binding of decision to evidence
+- Non-repudiable attestations
+- Clear explanation of verification properties
 
 ---
 
 ## Production Enhancements
 
-### News Sources (To Implement)
+### Real News Sources
 
-Replace mock evidence with real APIs:
+Replace mock evidence with actual APIs:
 
 ```typescript
 // oracle/src/news/guardian.ts
@@ -241,11 +248,11 @@ Replace mock evidence with real APIs:
 // oracle/src/news/aggregator.ts
 ```
 
-**Guardian API:** Free tier, high reliability
-**GDELT API:** Free, global event coverage
+**Guardian API:** Free tier, high reliability  
+**GDELT API:** Free, global event coverage  
 **Perplexity API:** Aggregated sources with citations
 
-### TEE Integration (Optional)
+### TEE Integration
 
 For maximum verifiability, run AI inside a TEE:
 
@@ -262,21 +269,21 @@ For maximum verifiability, run AI inside a TEE:
 
 ### Smart Contract Deployment
 
+**Local:**
+```bash
+cd contracts
+anvil
+forge script script/Deploy.s.sol --rpc-url http://localhost:8545 --broadcast --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+```
+
 **Testnet (Sepolia):**
 ```bash
 forge script script/Deploy.s.sol --rpc-url $SEPOLIA_RPC --broadcast --private-key $PRIVATE_KEY
 ```
 
-**Mainnet:**
-- Use same deploy script
-- Verify on Etherscan
-- Set up oracle signer address
-
 ---
 
 ## Environment Variables
-
-Create `.env` files:
 
 ### Oracle Service (`oracle/.env`)
 ```bash
@@ -293,8 +300,6 @@ CONFIDENTIAL_API_KEY=...  # For TEE mode
 
 ### Frontend (`demo/.env`)
 ```bash
-VITE_CONTRACT_ADDRESS=0x...  # Deployed SettlementOracle
-VITE_RPC_URL=http://localhost:8545
 VITE_ORACLE_API=http://localhost:3001
 ```
 
@@ -308,21 +313,16 @@ cd contracts
 forge test
 ```
 
-### Oracle Tests
-```bash
-cd oracle
-npm test
-```
-
 ### Manual Test Script
 
-1. Start anvil
-2. Deploy contracts
-3. Start oracle
-4. Start demo
-5. Create market
-6. Resolve market
-7. Verify attestation
+1. Start oracle: `cd oracle && npm run dev`
+2. Start demo: `cd demo && npm run dev`
+3. Open browser to `http://localhost:5173`
+4. Click "Resolve with Verifiable AI"
+5. Watch 20-second animation
+6. Verify outcome is NO with 92% confidence
+7. Expand verification panel
+8. Check attestation details
 
 ---
 
@@ -330,9 +330,9 @@ npm test
 
 | Issue | Solution |
 |-------|----------|
-| "Failed to fetch markets" | Ensure oracle is running on port 3001 |
-| "Contract not found" | Deploy contracts and update .env |
-| "Signature invalid" | Check oracle private key matches contract |
+| "Failed to fetch" | Ensure oracle is running on port 3001 |
+| Animation not smooth | Reduce browser zoom or close other tabs |
+| Result not showing | Check browser console for API errors |
 | CORS errors | Oracle has `cors()` enabled — check ports |
 
 ---
@@ -342,29 +342,26 @@ npm test
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                     FRONTEND (React + Vite)                     │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │   Market    │  │  Resolution │  │   Attestation         │  │
-│  │   List      │  │  Trigger    │  │   Display             │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  Single Page Demo                                       │   │
+│  │  • Market Card (static)                                │   │
+│  │  • Animated Network Visualization (SVG)                  │   │
+│  │  • Result Display                                      │   │
+│  │  • Verification Panel (collapsible)                     │   │
+│  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
                               │
-                              │ HTTP/WebSocket
+                              │ HTTP
                               ↓
 ┌─────────────────────────────────────────────────────────────────┐
 │                     ORACLE SERVICE (Node.js)                    │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
 │  │   AI        │  │  Evidence   │  │   EIP-712               │  │
-│  │   Resolver  │  │  Fetcher    │  │   Signing               │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              │ JSON-RPC
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│                     SMART CONTRACT (Solidity)                   │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │   Market    │  │  Resolution │  │   Attestation           │  │
-│  │   Storage   │  │  Logic      │  │   Verification          │  │
+│  │   Resolver  │  │  (mock)     │  │   Signing               │  │
+│  │             │  │             │  │                         │  │
+│  │  • NASA     │  │  • Sources  │  │  • Attestation          │  │
+│  │    specific │  │  • Hashes │  │    generation           │  │
+│  │  • 92% conf │  │  • Snippets│  │  • Signature            │  │
 │  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -374,10 +371,10 @@ npm test
 ## Next Steps
 
 1. **Add real news APIs** — Guardian, GDELT integration
-2. **Implement delay/retry logic** — 3 automatic retries
-3. **Add TEE support** — Confidential.ai integration
-4. **Deploy to testnet** — Sepolia for public demo
-5. **Build evidence explorer** — Show source articles
+2. **Add TEE support** — Confidential.ai integration
+3. **Deploy to testnet** — Sepolia for public demo
+4. **Add more demo markets** — Toggle between examples
+5. **Evidence explorer** — Show actual source articles
 
 ---
 
