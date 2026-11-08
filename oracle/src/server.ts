@@ -1,208 +1,194 @@
-import express from 'express';
 import cors from 'cors';
-import { AIResolver, type Market } from './ai-resolver.js';
-import { AttestationSigner, type Resolution, type Attestation } from './attestation.js';
-import { type Hex } from 'viem';
+import express, { type Request, type Response } from 'express';
+import { verifyReportOffline, verifyReportOnChain, type OracleReport } from '@oracle/shared';
+import { claudeDecider, type Decider } from './ai/decide.ts';
+import { bootstrapChain, readMarket, type ChainContext } from './chain.ts';
+import { loadConfig } from './config.ts';
+import { findMarket, MARKETS } from './markets.ts';
+import { gatherEvidence } from './news/aggregator.ts';
+import { runResolution, serializeMarket } from './pipeline.ts';
+import { ReportStore } from './reports.ts';
+import { RunManager } from './runs.ts';
+
+const config = loadConfig();
+const reports = new ReportStore(config.dataDir);
+const runs = new RunManager();
+const decider: Decider | null = config.anthropicApiKey
+  ? claudeDecider({ apiKey: config.anthropicApiKey, model: config.model, effort: config.effort, fallbacks: config.fallbacks })
+  : null;
+
+let chain: ChainContext | null = null;
+let chainError: string | null = null;
+let connecting: Promise<ChainContext | null> | null = null;
+
+/** Connects (and bootstraps) lazily, so the server starts even before the chain is up. */
+async function getChain(): Promise<ChainContext | null> {
+  if (chain) return chain;
+  connecting ??= bootstrapChain({
+    rpcUrl: config.rpcUrl,
+    deployerKey: config.deployerKey,
+    oracleKey: config.oracleKey,
+    contractAddress: config.contractAddress,
+    retryDelaySeconds: config.retryDelaySeconds,
+    dataDir: config.dataDir,
+    contractsOutDir: config.contractsOutDir,
+    markets: MARKETS,
+    log: (m) => console.log(`[chain] ${m}`),
+  })
+    .then((c) => {
+      chain = c;
+      chainError = null;
+      return c;
+    })
+    .catch((err: Error) => {
+      chainError = err.message;
+      console.error(`[chain] ${err.message}`);
+      return null;
+    })
+    .finally(() => {
+      connecting = null;
+    });
+  return connecting;
+}
+
+function reportSummary(r: OracleReport): Record<string, unknown> {
+  return {
+    reportId: r.reportId,
+    createdAt: r.createdAt,
+    attempt: r.attempt,
+    decision: r.decision.record.decision.decision,
+    confidenceBps: r.decision.confidenceBps,
+    action: r.decision.action,
+    published: r.publication !== null,
+    publicationError: r.publicationError,
+  };
+}
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
-// In-memory storage for demo
-const markets: Map<string, Market> = new Map();
-const resolutions: Map<string, Resolution> = new Map();
-const attestations: Map<string, Attestation> = new Map();
-
-// Initialize AI resolver and signer
-const aiResolver = new AIResolver();
-
-// Use a demo private key (DO NOT USE IN PRODUCTION)
-const DEMO_PRIVATE_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80' as Hex;
-const signer = new AttestationSigner(DEMO_PRIVATE_KEY);
-
-// Pre-populate demo market
-const DEMO_MARKET: Market = {
-  id: 'demo-nasa-astrobiology-2025',
-  question: 'Will NASA find definitive evidence of extraterrestrial life in 2025?',
-  resolutionCriteria: 'Resolves YES if NASA officially announces discovery of living organisms, fossilized life, or unambiguous biosignatures from beyond Earth. Resolves NO if only precursor molecules (amino acids, organic compounds) are found, as these indicate potential for life but are not life itself.',
-  resolutionTime: Date.now(),
-};
-markets.set(DEMO_MARKET.id, DEMO_MARKET);
-
-// Health check
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', signer: signer.getAddress() });
+app.get('/health', async (_req: Request, res: Response) => {
+  const c = await getChain();
+  res.json({
+    ok: true,
+    anthropic: { configured: decider !== null, model: config.model, effort: config.effort },
+    guardian: { key: config.guardianApiKey === 'test' ? 'public test key' : 'configured' },
+    chain: c
+      ? { connected: true, chainId: c.chain.id, contract: c.contract, oracleSigner: c.oracleAccount.address }
+      : { connected: false, error: chainError },
+    devKeys: config.usingDevKeys,
+  });
 });
 
-// Create a new market
-app.post('/markets', (req, res) => {
-  const { question, resolutionCriteria, resolutionTime } = req.body;
-  
-  if (!question || !resolutionCriteria || !resolutionTime) {
-    return res.status(400).json({ error: 'Missing required fields' });
-  }
+app.get('/config', async (_req: Request, res: Response) => {
+  const c = await getChain();
+  if (!c) return res.status(503).json({ error: chainError ?? 'chain unavailable' });
+  res.json({
+    chainId: c.chain.id,
+    contract: c.contract,
+    rpcUrl: process.env.PUBLIC_RPC_URL ?? config.rpcUrl,
+    oracleSigner: c.oracleAccount.address,
+    model: config.model,
+    modelConfigured: decider !== null,
+  });
+});
 
-  const id = '0x' + Buffer.from(
-    question + resolutionCriteria + resolutionTime + Date.now()
-  ).toString('hex').slice(0, 64) as `0x${string}`;
-
-  const market: Market = {
-    id,
-    question,
-    resolutionCriteria,
-    resolutionTime,
+async function marketView(slug: string, c: ChainContext): Promise<Record<string, unknown> | null> {
+  const spec = findMarket(slug);
+  const id = c.marketIds.get(slug);
+  if (!spec || id === undefined) return null;
+  const onchain = await readMarket(c, id);
+  const active = runs.activeFor(slug);
+  return {
+    spec,
+    onchain: serializeMarket(onchain),
+    reports: reports.list(slug, c.contract).map(reportSummary),
+    activeRunId: active?.id ?? null,
+    chainTime: (await c.publicClient.getBlock()).timestamp.toString(),
   };
+}
 
-  markets.set(id, market);
-  
-  res.json({
-    success: true,
-    market,
-  });
+app.get('/markets', async (_req: Request, res: Response) => {
+  const c = await getChain();
+  if (!c) return res.status(503).json({ error: chainError ?? 'chain unavailable' });
+  res.json(await Promise.all(MARKETS.map((m) => marketView(m.slug, c))));
 });
 
-// Get all markets
-app.get('/markets', (_req, res) => {
-  res.json({
-    markets: Array.from(markets.values()),
-    count: markets.size,
-  });
+app.get('/markets/:slug', async (req: Request, res: Response) => {
+  const c = await getChain();
+  if (!c) return res.status(503).json({ error: chainError ?? 'chain unavailable' });
+  const view = await marketView(String(req.params.slug), c);
+  if (!view) return res.status(404).json({ error: 'unknown market' });
+  res.json(view);
 });
 
-// Get a specific market
-app.get('/markets/:id', (req, res) => {
-  const market = markets.get(req.params.id);
-  if (!market) {
-    return res.status(404).json({ error: 'Market not found' });
-  }
-  res.json({ market });
-});
-
-// Resolve a market using AI
-app.post('/markets/:id/resolve', async (req, res) => {
-  const marketId = req.params.id;
-  const market = markets.get(marketId);
-  
-  if (!market) {
-    return res.status(404).json({ error: 'Market not found' });
-  }
-
-  if (resolutions.has(marketId)) {
-    return res.status(400).json({ error: 'Market already resolved' });
-  }
-
-  try {
-    const result = await aiResolver.resolve(market);
-    
-    const resolution: Resolution = {
-      marketId: market.id as `0x${string}`,
-      outcome: result.outcomeHash,
-      timestamp: BigInt(result.timestamp),
-      reasoning: result.reasoning,
-    };
-
-    resolutions.set(marketId, resolution);
-
-    res.json({
-      success: true,
-      result,
-      resolution,
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      error: 'Resolution failed', 
-      details: error instanceof Error ? error.message : String(error) 
+app.post('/markets/:slug/resolve', async (req: Request, res: Response) => {
+  const slug = String(req.params.slug);
+  const spec = findMarket(slug);
+  if (!spec) return res.status(404).json({ error: 'unknown market' });
+  if (!decider) {
+    return res.status(503).json({
+      error: 'ANTHROPIC_API_KEY is not set. The oracle only settles from a model decision over real sources, so it will not run without one.',
     });
   }
-});
+  const c = await getChain();
+  if (!c) return res.status(503).json({ error: chainError ?? 'chain unavailable' });
+  const active = runs.activeFor(slug);
+  if (active) return res.status(409).json({ error: 'a resolution is already running', runId: active.id });
 
-// Create attestation for a resolution
-app.post('/markets/:id/attest', async (req, res) => {
-  const marketId = req.params.id;
-  const resolution = resolutions.get(marketId);
-  
-  if (!resolution) {
-    return res.status(404).json({ error: 'Resolution not found' });
-  }
-
-  if (attestations.has(marketId)) {
-    return res.status(400).json({ error: 'Attestation already exists' });
-  }
-
-  try {
-    const attestation = await signer.createAttestation(resolution);
-    attestations.set(marketId, attestation);
-
-    res.json({
-      success: true,
-      attestation: {
-        resolution: attestation.resolution,
-        signature: attestation.signature,
-        signer: signer.getAddress(),
+  const run = runs.start(slug, async (emit) => {
+    const report = await runResolution(
+      {
+        chain: c,
+        decider,
+        reports,
+        gather: (s, log) =>
+          gatherEvidence(
+            s,
+            { timeoutMs: config.httpTimeoutMs, guardianApiKey: config.guardianApiKey, log },
+            { maxEvidence: config.maxEvidence, maxCharsPerSource: config.maxCharsPerSource },
+          ),
       },
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      error: 'Attestation failed', 
-      details: error instanceof Error ? error.message : String(error) 
-    });
-  }
-});
-
-// Verify an attestation
-app.post('/verify', async (req, res) => {
-  const { attestation, expectedSigner } = req.body;
-  
-  if (!attestation || !expectedSigner) {
-    return res.status(400).json({ error: 'Missing attestation or expectedSigner' });
-  }
-
-  try {
-    const valid = await signer.verifyAttestation(attestation, expectedSigner as Hex);
-    res.json({
-      valid,
-      attestation,
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      error: 'Verification failed', 
-      details: error instanceof Error ? error.message : String(error) 
-    });
-  }
-});
-
-// Get attestation for a market
-app.get('/markets/:id/attestation', (req, res) => {
-  const attestation = attestations.get(req.params.id);
-  if (!attestation) {
-    return res.status(404).json({ error: 'Attestation not found' });
-  }
-  
-  res.json({
-    attestation: {
-      resolution: attestation.resolution,
-      signature: attestation.signature,
-      signer: signer.getAddress(),
-    },
+      spec,
+      emit,
+    );
+    return report.reportId;
   });
+  res.status(202).json({ runId: run.id });
 });
 
-// List all attestations
-app.get('/attestations', (_req, res) => {
-  const allAttestations = Array.from(attestations.entries()).map(([marketId, att]) => ({
-    marketId,
-    resolution: att.resolution,
-    signature: att.signature,
-    signer: signer.getAddress(),
-  }));
-  
-  res.json({ attestations: allAttestations });
+app.get('/runs/:id', (req: Request, res: Response) => {
+  const run = runs.get(String(req.params.id));
+  if (!run) return res.status(404).json({ error: 'unknown run' });
+  res.json(run);
 });
 
-const PORT = process.env.PORT || 3001;
+app.get('/runs/:id/events', (req: Request, res: Response) => {
+  const run = runs.get(String(req.params.id));
+  if (!run) return res.status(404).json({ error: 'unknown run' });
+  runs.subscribe(run, res);
+});
 
-app.listen(PORT, () => {
-  console.log(`🔮 AI Settlement Oracle running on port ${PORT}`);
-  console.log(`🔑 Signer address: ${signer.getAddress()}`);
-  console.log(`📊 Demo market loaded: NASA Astrobiology 2025`);
+app.get('/reports/:id', (req: Request, res: Response) => {
+  const report = reports.get(String(req.params.id));
+  if (!report) return res.status(404).json({ error: 'unknown report' });
+  res.json(report);
+});
+
+/** Convenience server-side check; the demo also verifies independently in the browser. */
+app.get('/reports/:id/verify', async (req: Request, res: Response) => {
+  const report = reports.get(String(req.params.id));
+  if (!report) return res.status(404).json({ error: 'unknown report' });
+  const checks = await verifyReportOffline(report);
+  const c = await getChain();
+  if (c) checks.push(...(await verifyReportOnChain(c.publicClient, report)));
+  res.json({ ok: checks.every((x) => x.ok), checks });
+});
+
+app.listen(config.port, () => {
+  console.log(`Oracle service listening on http://localhost:${config.port}`);
+  if (!decider) console.warn('ANTHROPIC_API_KEY is not set: resolutions are disabled until it is.');
+  if (config.usingDevKeys) console.warn('Using Anvil development keys. Never use them outside a local chain.');
+  void getChain();
 });

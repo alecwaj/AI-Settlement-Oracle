@@ -1,173 +1,102 @@
 # AI Settlement Oracle
 
-A verifiable AI system for prediction market resolution using cryptographic attestations.
+A verifiable AI oracle for prediction markets. For each market it:
 
-## Overview
+1. **Reads the settlement conditions.** The market's rules (question, YES/NO conditions, notes, evidence window, accepted sources, search queries) are stored on-chain, and every decision commits to their hash.
+2. **Sources evidence from trusted outlets.** It queries The Guardian, GDELT (limited to Reuters, AP, BBC, NPR, NASA, Nature and Science) and nasa.gov, keeps only trusted domains inside the evidence window, and hashes the exact text it will show the model.
+3. **Decides.** Claude applies the rules to those sources and returns YES, NO or INSUFFICIENT_EVIDENCE, with a confidence score, a per-condition assessment and reasoning that cites source ids. **There is no stored or default answer.** If the evidence is thin, or confidence is below the market's threshold, the market is delayed and retried. After three delays it pauses for a manual decision.
+4. **Signs and publishes.** The oracle signs an EIP-712 attestation binding the decision to the rules hash, the evidence hash, the decision-logic hash and the full report hash. It then posts the decision logic, every source (URL + SHA-256) and the signature to the `SettlementOracle` contract, which rejects anything that does not match.
+5. **Lets anyone verify.** The demo's **Verify independently** button works in the browser without trusting the oracle service. It recomputes every hash, rebuilds the exact model input, recovers the signer, and compares the result with the events the contract emitted. `npm run verify` does the same from the command line.
 
-This project demonstrates a decentralized AI oracle that resolves prediction markets with cryptographic proofs. It combines:
-
-- **Smart Contracts**: EIP-712 attestations for verifiable AI resolutions (Foundry/Solidity)
-- **AI Oracle**: TypeScript service that simulates AI resolution with deterministic outcomes
-- **Demo UI**: React frontend for creating markets and viewing attestations
-
-## Project Structure
-
-```
-ai-settlement-oracle/
-├── contracts/          # Foundry project
-│   ├── src/
-│   │   ├── SettlementOracle.sol      # Main oracle contract
-│   │   └── AttestationRegistry.sol   # Batch verification
-│   ├── test/
-│   │   └── SettlementOracle.t.sol    # Contract tests
-│   └── script/
-├── oracle/             # TypeScript oracle service
-│   └── src/
-│       ├── ai-resolver.ts           # AI resolution logic
-│       ├── attestation.ts           # EIP-712 signing
-│       └── server.ts                # Express API
-├── demo/               # React frontend (Vite)
-│   └── src/
-│       ├── components/
-│       │   ├── MarketDetail.tsx     # Market view + resolution
-│       │   ├── MarketForm.tsx       # Create market
-│       │   └── MarketList.tsx       # List all markets
-│       ├── App.tsx
-│       └── types.ts
-├── README.md
-├── BUILD_GUIDE.md      # Complete setup & demo guide
-├── NOTES.md            # Design decisions & research
-└── PROMPT.md           # Original build specification
-```
+The demo market is *"Will NASA find definitive evidence of extraterrestrial life in 2025?"* Its outcome comes from whatever the sources say at run time.
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────────┐
-│   Demo UI   │────▶│  AI Oracle   │────▶│  Smart Contract │
-│   (React)   │     │  (Node.js)   │     │  (Solidity)     │
-└─────────────┘     └──────────────┘     └─────────────────┘
-                           │
-                           ▼
-                    ┌──────────────┐
-                    │ Attestation  │
-                    │ (EIP-712)    │
-                    └──────────────┘
+ demo/ (React + Vite)                 oracle/ (Node + Express)                    contracts/ (Foundry)
+┌──────────────────────┐  HTTP/SSE  ┌─────────────────────────────────────┐  tx   ┌──────────────────────────┐
+│ market + conditions  │──────────▶ │ 1 rules     read spec, check chain  │──────▶│ SettlementOracle         │
+│ live pipeline view   │ ◀───────── │ 2 sourcing  Guardian · GDELT · NASA │       │  • rules stored on-chain │
+│ decision + sources   │            │ 3 evidence  filter, hash (sha256)   │       │  • verifies EIP-712 sig  │
+│ verify in browser ───┼──── RPC ──▶│ 4 decision  Claude, structured JSON │       │  • recomputes evidence & │
+└──────────────────────┘            │ 5 attest    EIP-712 signature       │       │    reasoning hashes      │
+          ▲                         │ 6 publish   submitResolution()      │       │  • delay ×3 → pause      │
+          └── shared/ (hashing, EIP-712 types, prompt, verifier) ───────┘       │  • emits logic + sources │
+                                                                                 └──────────────────────────┘
 ```
 
-## Quick Start
+`shared/` holds everything that both the oracle and an independent verifier must agree on: canonical JSON, the hash definitions, the EIP-712 types, the prompt and input builder, and the verifier itself.
 
-See **[BUILD_GUIDE.md](BUILD_GUIDE.md)** for complete setup and demo walkthrough.
+## What the signature commits to
+
+| Field | Meaning | Checked by |
+|---|---|---|
+| `rulesHash` | keccak256 of the market's canonical rules document | contract (must equal stored rules) |
+| `evidenceHash` | keccak256 over `(keccak256(url), sha256(text))` for each source | contract (recomputed from posted sources) |
+| `reasoningHash` | keccak256 of the decision logic (canonical JSON: verdict, conditions, reasoning, citations, served model, prompt hash, input hash, oracle adjustments) | contract (recomputed from posted logic) |
+| `reportHash` | keccak256 of the full report body | verifier |
+| `decision`, `confidenceBps` | verdict and confidence | contract (delay/settle rule) |
+| `attempt`, `timestamp` | replay protection and decision time | contract |
+
+## Quick start
+
+Prerequisites: Node 20+, [Foundry](https://getfoundry.sh) (`forge`, `anvil`), an Anthropic API key, and optionally a free [Guardian API key](https://open-platform.theguardian.com/access/).
 
 ```bash
-# 1. Install dependencies
+git clone --recurse-submodules <repo-url> && cd AI-Settlement-Oracle
 npm install
-cd contracts && forge install
-cd ../oracle && npm install
-cd ../demo && npm install
+(cd contracts && forge build)
 
-# 2. Start local chain
-cd contracts && anvil
-
-# 3. Start oracle service
-cd oracle && npm run dev
-
-# 4. Start demo UI
-cd demo && npm run dev
+anvil                                   # terminal 1: local chain
+cp oracle/.env.example oracle/.env      # set ANTHROPIC_API_KEY (and GUARDIAN_API_KEY)
+npm run oracle                          # terminal 2: deploys the contract, registers the market
+npm run demo                            # terminal 3: http://localhost:5173
 ```
 
-Open http://localhost:5173 to see the demo.
+If you cloned without `--recurse-submodules`, run `git submodule update --init --recursive`.
 
-## Key Features
+See **[BUILD_GUIDE.md](BUILD_GUIDE.md)** for the full walkthrough, configuration and deployment.
 
-### 1. EIP-712 Attestations
-All AI resolutions are signed using EIP-712 structured data, making them:
-- Human-readable in wallets
-- Verifiable on-chain
-- Non-repudiable
-
-### 2. Deterministic AI Resolution
-The oracle simulates AI resolution with deterministic outcomes based on market parameters. In production, this would integrate with actual LLM APIs and news sources (The Guardian, GDELT).
-
-### 3. Smart Contract Verification
-The `SettlementOracle` contract verifies:
-- Signer authorization
-- Signature validity
-- Resolution timing
-- Double-resolution prevention
-
-### 4. Delay Mechanism (Planned)
-For ambiguous markets:
-- AI returns confidence score (0.0-1.0)
-- Below threshold → DELAYED_FOR_EVIDENCE
-- Automatic retry after delay period
-- Max 3 retries before PAUSED_FOR_MANUAL
-
-## Demo Flow
-
-1. **Create Market** — Set question, criteria, resolution time
-2. **View Market** — See pending status
-3. **Resolve with AI** — Trigger AI analysis
-4. **See Results** — Outcome, confidence, reasoning, evidence
-5. **Create Attestation** — Cryptographic signature of resolution
-6. **Verify On-Chain** — Confirm attestation validity
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/markets` | GET | List all markets |
-| `/markets` | POST | Create new market |
-| `/markets/:id/resolve` | POST | AI resolve market |
-| `/markets/:id/attest` | POST | Create attestation |
-| `/verify` | POST | Verify attestation |
-
-## Smart Contract Functions
-
-```solidity
-// Create a new prediction market
-function createMarket(string question, string criteria, uint256 resolutionTime) returns (bytes32)
-
-// Resolve with AI attestation
-function resolveWithAttestation(bytes32 marketId, bytes32 outcome, string reasoning, bytes signature)
-
-// Verify an attestation
-function verifyAttestation(bytes32 marketId, bytes32 expectedOutcome) returns (bool)
-```
-
-## Testing
+## Tests
 
 ```bash
-# Contract tests
-cd contracts && forge test
-
-# Oracle tests
-cd oracle && npm test
+cd contracts && forge test      # 23 tests: settle, delay, pause, manual override, tampering, replay, signer checks
+npm test --workspace=oracle     # parsing, evidence selection, decision validation, and an end-to-end
+                                # pipeline test against a local Anvil chain (needs anvil + forge build)
 ```
 
-## Built With
+The end-to-end test swaps the news providers and the model for deterministic test doubles. The running service never uses them.
 
-- **Solidity** + **Foundry** - Smart contracts and testing
-- **Viem** - Ethereum interactions
-- **Express** - Oracle API
-- **React** + **Vite** - Demo UI
-- **RainbowKit** - Wallet connection
+## API
 
-## Documentation
+| Endpoint | Description |
+|---|---|
+| `GET /health` | Model, chain and key status |
+| `GET /config` | Chain id, contract, RPC URL for browser verification |
+| `GET /markets` | Market rules, on-chain state, past reports |
+| `POST /markets/:slug/resolve` | Start a resolution (returns `runId`; 503 without an Anthropic key) |
+| `GET /runs/:id/events` | Live pipeline events (Server-Sent Events) |
+| `GET /reports/:id` | Full signed report (JSON) |
+| `GET /reports/:id/verify` | Server-side run of the same verifier |
 
-- **[BUILD_GUIDE.md](BUILD_GUIDE.md)** — Complete setup, deployment, and demo walkthrough
-- **[NOTES.md](NOTES.md)** — Design decisions, research on TEEs, news APIs, trust models
-- **[PROMPT.md](PROMPT.md)** — Original build specification
+## Limits and trust assumptions
 
-## Future Enhancements
+- **The verification proves integrity, not correctness.** It proves which rules, sources and logic produced a decision, and that an authorized key signed it. It does not prove the model reasoned well. Anyone can read the posted logic and sources and judge that.
+- **The oracle operator is trusted to run the code as published.** Running the oracle inside a TEE (see `NOTES.md`) would extend the proof to the code and model. That is not implemented.
+- **Coverage depends on the sources.** GDELT's DOC API may not return results for dates far in the past, and some outlets block automated fetches or paywall text. Every provider error is recorded in the report rather than hidden.
+- **On-chain storage.** Decision logic and source URLs live in event logs. Full source text lives in the signed report, and its hashes are on-chain.
 
-- [ ] Real news API integration (Guardian, GDELT)
-- [ ] Delay/retry mechanism (3 automatic retries)
-- [ ] TEE integration (Confidential.ai)
-- [ ] Evidence explorer UI
-- [ ] Testnet deployment
-- [ ] Dispute mechanism
+## Repository layout
+
+```
+contracts/   SettlementOracle.sol, tests, deploy script (Foundry; deps as git submodules)
+shared/      hashing, EIP-712 types, prompt + input builder, verifier, generated ABI
+oracle/      Express service: news providers, Claude decision, chain bootstrap, pipeline, reports
+demo/        React single-page demo
+scripts/     export-abi.mjs (regenerates shared/src/abi.ts after `forge build`)
+```
+
+`PROMPT.md`, `claude-prompt.md`, `CLAUDE_CODE_GUIDE.md` and `NOTES.md` are the original planning documents and are kept for reference. The code above supersedes their implementation details: in particular, the demo no longer has a hardcoded outcome.
 
 ## License
 
