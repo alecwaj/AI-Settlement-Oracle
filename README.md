@@ -40,7 +40,7 @@ The demo market is *"Will NASA find definitive evidence of extraterrestrial life
 
 ## Quick start
 
-Prerequisites: Node 20+, [Foundry](https://getfoundry.sh) (`forge`, `anvil`), an Anthropic API key, and optionally a free [Guardian API key](https://open-platform.theguardian.com/access/).
+Prerequisites: Node 22+, [Foundry](https://getfoundry.sh) (`forge`, `anvil`), an Anthropic API key, and optionally a free [Guardian API key](https://open-platform.theguardian.com/access/).
 
 ```bash
 git clone --recurse-submodules <repo-url> && cd AI-Settlement-Oracle

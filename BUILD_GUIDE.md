@@ -6,7 +6,7 @@ Setup, demo walkthrough, configuration and deployment.
 
 ## Prerequisites
 
-- **Node.js 20+** and npm
+- **Node.js 22+** and npm
 - **Foundry** (`forge`, `anvil`): `curl -L https://foundry.paradigm.xyz | bash && foundryup`, or `npm i -g @foundry-rs/forge @foundry-rs/anvil`
 - **Anthropic API key**: required. The oracle will not resolve without a model.
 - **Guardian API key**: optional but recommended (free at https://open-platform.theguardian.com/access/). Without one it uses the public, rate-limited `test` key.
