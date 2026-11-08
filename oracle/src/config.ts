@@ -32,6 +32,8 @@ export interface Config {
   oracleKey: Hex;
   usingDevKeys: boolean;
   retryDelaySeconds: number;
+  /** Re-run delayed markets automatically when their on-chain delay ends. */
+  autoRetry: boolean;
   maxEvidence: number;
   maxCharsPerSource: number;
   httpTimeoutMs: number;
@@ -59,6 +61,7 @@ export function loadConfig(): Config {
     oracleKey,
     usingDevKeys: oracleKey === ANVIL_ORACLE_KEY || deployerKey === ANVIL_DEPLOYER_KEY,
     retryDelaySeconds: int('RETRY_DELAY_SECONDS', 300),
+    autoRetry: env('AUTO_RETRY') !== 'false',
     maxEvidence: int('MAX_EVIDENCE', 20),
     maxCharsPerSource: int('MAX_CHARS_PER_SOURCE', 6000),
     httpTimeoutMs: int('HTTP_TIMEOUT_MS', 20000),

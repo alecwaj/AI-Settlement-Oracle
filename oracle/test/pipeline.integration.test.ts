@@ -13,7 +13,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createPublicClient, createTestClient, http, type PublicClient } from 'viem';
+import { createPublicClient, createTestClient, http, keccak256, toHex, type PublicClient } from 'viem';
 import { foundry } from 'viem/chains';
 import {
   buildDecisionInput,
@@ -27,7 +27,7 @@ import {
   type ProviderStatus,
 } from '@oracle/shared';
 import type { Decider } from '../src/ai/decide.ts';
-import { bootstrapChain, readMarket, type ChainContext } from '../src/chain.ts';
+import { bootstrapChain, describeContractError, readMarket, type ChainContext } from '../src/chain.ts';
 import { MARKETS } from '../src/markets.ts';
 import { selectEvidence, type EvidenceResult } from '../src/news/aggregator.ts';
 import { PipelineError, runResolution, type PipelineDeps } from '../src/pipeline.ts';
@@ -109,10 +109,13 @@ suite('oracle pipeline on a local chain', () => {
     gather: async () => structuredClone(evidence),
   });
 
+  /**
+   * Moves the chain clock forward without mining, as happens in real use when no transactions
+   * arrive during a delay: the latest block keeps its old timestamp, only the next block is later.
+   */
   const advance = async (seconds: number): Promise<void> => {
     const test = createTestClient({ chain: foundry, mode: 'anvil', transport: http(rpcUrl) });
     await test.increaseTime({ seconds });
-    await test.mine({ blocks: 1 });
   };
 
   async function verifyAll(report: OracleReport): Promise<void> {
@@ -237,6 +240,26 @@ suite('oracle pipeline on a local chain', () => {
     expect(c2.find((c) => c.id === 'reasoning')?.ok).toBe(false);
     const c3 = await verifyReportOnChain(client, editedLogic);
     expect(c3.find((c) => c.id === 'onchain-decision')?.ok).toBe(false);
+  });
+
+  it('reports contract rejections by their custom error name', async () => {
+    const zero = keccak256(toHex('x'));
+    const err = await chain.publicClient
+      .simulateContract({
+        address: chain.contract,
+        abi: (await import('@oracle/shared')).settlementOracleAbi,
+        functionName: 'submitResolution',
+        args: [
+          { marketId: 99n, attempt: 0, decision: 2, confidenceBps: 9000, rulesHash: zero, evidenceHash: zero, reasoningHash: zero, reportHash: zero, timestamp: 0n },
+          '',
+          [],
+          '0x',
+        ],
+        account: chain.deployer.account,
+      })
+      .then(() => null)
+      .catch((e: unknown) => e);
+    expect(describeContractError(err)).toBe('contract rejected the resolution: MarketNotFound()');
   });
 
   it('rejects resolutions once the market is settled', async () => {

@@ -1,15 +1,25 @@
-import type { OracleReport } from '@oracle/shared';
+import type { EvidenceItem, OracleReport, ProviderStatus } from '@oracle/shared';
+import type { SourcePreview } from '../api.ts';
 import { fmtDate, short } from '../format.ts';
 
-export function Sources({ report }: { report: OracleReport }) {
-  const cited = new Set(report.decision.record.decision.citedSourceIds);
-  const { evidence, providers } = report.sourcing;
+interface ListProps {
+  heading: string;
+  subtitle: string;
+  evidence: EvidenceItem[];
+  providers: ProviderStatus[];
+  cited: Set<string>;
+  banner?: string;
+  preview?: boolean;
+}
+
+function SourceList({ heading, subtitle, evidence, providers, cited, banner, preview = false }: ListProps) {
   return (
     <section className="card sources">
       <div className="section-head">
-        <h3>Sources</h3>
-        <span className="muted">{evidence.length} given to the model · {cited.size} cited</span>
+        <h3>{heading}</h3>
+        <span className="muted">{subtitle}</span>
       </div>
+      {banner && <p className="banner">{banner}</p>}
       <div className="provider-status">
         {providers.map((p) => (
           <details key={p.provider}>
@@ -38,7 +48,10 @@ export function Sources({ report }: { report: OracleReport }) {
               </div>
               <a href={e.url} target="_blank" rel="noreferrer" className="source-title">{e.title}</a>
               <details>
-                <summary className="muted small">Text the model read ({e.text.length.toLocaleString()} chars) · sha256 <span className="mono">{short(e.contentHash)}</span></summary>
+                <summary className="muted small">
+                  Text the model {preview ? 'would read' : 'read'} ({e.text.length.toLocaleString()} chars) · sha256{' '}
+                  <span className="mono">{short(e.contentHash)}</span>
+                </summary>
                 <pre className="source-text">{e.text}</pre>
               </details>
             </li>
@@ -46,5 +59,35 @@ export function Sources({ report }: { report: OracleReport }) {
         </ol>
       )}
     </section>
+  );
+}
+
+export function Sources({ report }: { report: OracleReport }) {
+  const cited = new Set(report.decision.record.decision.citedSourceIds);
+  return (
+    <SourceList
+      heading="Sources"
+      subtitle={`${report.sourcing.evidence.length} given to the model · ${cited.size} cited`}
+      evidence={report.sourcing.evidence}
+      providers={report.sourcing.providers}
+      cited={cited}
+    />
+  );
+}
+
+export function PreviewSources({ preview, onClose }: { preview: SourcePreview; onClose: () => void }) {
+  return (
+    <div className="preview-wrap">
+      <SourceList
+        heading="Source preview"
+        subtitle={`${preview.evidence.length} sources · fetched ${preview.finishedAt.slice(11, 19)} UTC`}
+        evidence={preview.evidence}
+        providers={preview.providers}
+        cited={new Set()}
+        preview
+        banner="Preview only: these are the sources a resolution would use right now. Nothing was sent to the model, signed or posted on-chain."
+      />
+      <button className="link-button preview-close" onClick={onClose}>Close preview</button>
+    </div>
   );
 }

@@ -41,7 +41,9 @@ export function Result({ report }: { report: OracleReport }) {
           <div className="action-line">
             {action === 'RESOLVE'
               ? `Market settles ${d.decision}.`
-              : 'Market delayed: the oracle will look again for more evidence.'}
+              : report.publication?.marketStatusAfter === 'PAUSED'
+                ? 'Third delay: the market is paused for a manual decision by the contract owner.'
+                : 'Market delayed: the oracle will look again for more evidence.'}
             {report.publication ? ` On-chain status: ${report.publication.marketStatusAfter}.` : ''}
           </div>
         </div>

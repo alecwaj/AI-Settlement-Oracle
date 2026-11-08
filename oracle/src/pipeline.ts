@@ -22,7 +22,7 @@ import {
   type ResolutionMessage,
 } from '@oracle/shared';
 import type { Decider } from './ai/decide.ts';
-import { chainTime, readMarket, type ChainContext } from './chain.ts';
+import { chainTime, describeContractError, readMarket, type ChainContext } from './chain.ts';
 import type { EvidenceResult } from './news/aggregator.ts';
 import type { ReportStore } from './reports.ts';
 
@@ -235,6 +235,8 @@ export async function runResolution(
       functionName: 'submitResolution',
       args,
       account: chain.deployer.account,
+      // Simulate against the next block: the latest block's timestamp may be stale.
+      blockTag: 'pending',
     });
     const txHash = await chain.deployer.writeContract(request);
     const receipt = await chain.publicClient.waitForTransactionReceipt({ hash: txHash });
@@ -258,7 +260,7 @@ export async function runResolution(
       data: { txHash, blockNumber: receipt.blockNumber.toString(), market: serializeMarket(after) },
     });
   } catch (err) {
-    report.publicationError = (err as Error).message.split('\n')[0] ?? 'unknown error';
+    report.publicationError = describeContractError(err);
     deps.reports.save(report);
     throw new PipelineError(
       'publication',

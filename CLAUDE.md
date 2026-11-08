@@ -37,7 +37,9 @@ node scripts/export-abi.mjs          # after contract changes
 anvil                                # local chain
 npm run oracle                       # needs ANTHROPIC_API_KEY in oracle/.env
 npm run demo
-npm test --workspace=oracle          # includes Anvil integration test
+npm run preview-sources              # sourcing only; no model, no chain
+(cd oracle && npm run manual-resolve -- <slug> YES|NO "reason")   # owner, PAUSED markets only
+npm test                             # shared + oracle (oracle includes Anvil integration test)
 npm run typecheck
 ```
 

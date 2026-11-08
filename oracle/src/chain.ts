@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  BaseError,
+  ContractFunctionRevertedError,
   createPublicClient,
   createWalletClient,
   defineChain,
@@ -234,7 +236,33 @@ export async function readMarket(ctx: ChainContext, marketId: bigint): Promise<O
   };
 }
 
+/**
+ * Timestamp the next block will carry, which is what the contract's time checks will see.
+ * The latest block's timestamp only advances when a block is mined (on Anvil, when a transaction
+ * arrives), so it can lag far behind; the pending block reflects the node's current clock,
+ * including any test-time adjustments. Falls back to max(latest, wall clock).
+ */
 export async function chainTime(ctx: ChainContext): Promise<bigint> {
+  try {
+    const pending = await ctx.publicClient.getBlock({ blockTag: 'pending' });
+    if (pending?.timestamp) return pending.timestamp;
+  } catch {
+    // node does not expose a pending block
+  }
   const block = await ctx.publicClient.getBlock();
-  return block.timestamp;
+  const wall = BigInt(Math.floor(Date.now() / 1000));
+  return block.timestamp > wall ? block.timestamp : wall;
+}
+
+/** Turns a viem contract error into a one-line message that names the contract's custom error. */
+export function describeContractError(err: unknown): string {
+  if (err instanceof BaseError) {
+    const revert = err.walk((e) => e instanceof ContractFunctionRevertedError);
+    if (revert instanceof ContractFunctionRevertedError && revert.data?.errorName) {
+      const args = (revert.data.args ?? []).map((a) => String(a)).join(', ');
+      return `contract rejected the resolution: ${revert.data.errorName}(${args})`;
+    }
+    return err.shortMessage;
+  }
+  return (err as Error).message?.split('\n')[0] ?? String(err);
 }

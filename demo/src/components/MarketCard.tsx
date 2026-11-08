@@ -8,6 +8,9 @@ interface Props {
   retryIn: number;
   onRun: () => void;
   runError: string | null;
+  autoRetryIn: number | null;
+  previewing: boolean;
+  onPreview: () => void;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -17,7 +20,7 @@ const STATUS_LABEL: Record<string, string> = {
   PAUSED: 'Paused for manual review',
 };
 
-export function MarketCard({ market, config, running, retryIn, onRun, runError }: Props) {
+export function MarketCard({ market, config, running, retryIn, onRun, runError, autoRetryIn, previewing, onPreview }: Props) {
   const { spec, onchain } = market;
   const accepting = onchain.status === 'OPEN' || onchain.status === 'DELAYED';
   const waiting = onchain.status === 'DELAYED' && retryIn > 0;
@@ -58,14 +61,29 @@ export function MarketCard({ market, config, running, retryIn, onRun, runError }
       </dl>
 
       <div className="actions">
-        <button className="primary" disabled={disabled} onClick={onRun}>
-          {running ? 'Oracle running…' : onchain.attempts === 0 ? 'Run the oracle' : 'Run the oracle again'}
-        </button>
+        <div className="buttons">
+          <button className="primary" disabled={disabled} onClick={onRun}>
+            {running ? 'Oracle running…' : onchain.attempts === 0 ? 'Run the oracle' : 'Run the oracle again'}
+          </button>
+          <button onClick={onPreview} disabled={previewing || running} title="Fetch sources only: no model call, nothing signed or posted">
+            {previewing ? 'Fetching sources…' : 'Preview sources'}
+          </button>
+        </div>
         {!config.modelConfigured && (
           <p className="warn">The oracle service has no ANTHROPIC_API_KEY, so it will not resolve. Set it and restart the service.</p>
         )}
-        {waiting && <p className="muted">Retry allowed in {fmtDuration(retryIn)} (on-chain delay).</p>}
+        {waiting && autoRetryIn === null && <p className="muted">Retry allowed in {fmtDuration(retryIn)} (on-chain delay).</p>}
+        {onchain.status === 'DELAYED' && autoRetryIn !== null && !running && (
+          <p className="muted">The oracle will look again automatically in {fmtDuration(autoRetryIn)}.</p>
+        )}
+        {onchain.status === 'DELAYED' && market.autoRetryHalted && <p className="warn">{market.autoRetryHalted}</p>}
         {onchain.status === 'PAUSED' && <p className="warn">Three delays used. The contract now requires a manual decision by its owner.</p>}
+        {market.manualResolution && (
+          <p className="warn">
+            Settled {market.manualResolution.outcome} by the contract owner after three delays: &ldquo;{market.manualResolution.reason}&rdquo;{' '}
+            <span className="mono muted">(tx {short(market.manualResolution.txHash)})</span>
+          </p>
+        )}
         {runError && <p className="error">{runError}</p>}
       </div>
     </section>

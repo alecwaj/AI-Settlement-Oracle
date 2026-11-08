@@ -18,8 +18,8 @@ Setup, demo walkthrough, configuration and deployment.
 ```bash
 git clone --recurse-submodules https://github.com/alecwaj/AI-Settlement-Oracle.git
 cd AI-Settlement-Oracle
-npm install                       # installs shared/, oracle/, demo/ workspaces
-cd contracts && forge build && forge test && cd ..
+npm run setup                     # npm install + forge build + ABI export
+(cd contracts && forge test)
 ```
 
 `forge build` must run before the oracle starts: the oracle deploys the compiled contract to your local chain.
@@ -30,7 +30,15 @@ After changing the contract, regenerate the TypeScript ABI:
 node scripts/export-abi.mjs
 ```
 
-## 2. Configure the oracle
+## 2. Check the news sources (no keys needed)
+
+```bash
+npm run preview-sources
+```
+
+This runs only the sourcing step for the demo market and prints each provider's status and the sources a resolution would use. It uses the Guardian's public `test` key unless `GUARDIAN_API_KEY` is set. Nothing is sent to a model, signed or posted. The demo's **Preview sources** button does the same.
+
+## 3. Configure the oracle
 
 ```bash
 cp oracle/.env.example oracle/.env
@@ -38,7 +46,7 @@ cp oracle/.env.example oracle/.env
 
 Set at least `ANTHROPIC_API_KEY`. Every option is documented in `oracle/.env.example`.
 
-## 3. Run
+## 4. Run
 
 ```bash
 anvil                 # terminal 1
@@ -90,9 +98,18 @@ A run takes from about 30 seconds to a few minutes, depending on news APIs and m
 - **Sources:** every source the model saw, with outlet, date, link, the exact text it read and its SHA-256, plus each provider's errors and notes.
 - **Cryptographic verification:** the attestation fields and the transaction. **Verify independently** runs 15 checks in your browser against the published report and the chain.
 
-### Delays
+### Delays and automatic retries
 
-If the verdict is INSUFFICIENT_EVIDENCE or confidence is below 70%, the contract marks the market **DELAYED** until `RETRY_DELAY_SECONDS` have passed (default 300). The card shows a countdown, after which **Run the oracle again** is available. After three delays the market is **PAUSED** and only the contract owner can settle it with `manualResolve`.
+If the verdict is INSUFFICIENT_EVIDENCE or confidence is below 70%, the contract marks the market **DELAYED** until `RETRY_DELAY_SECONDS` have passed (default 300). The oracle then runs again automatically, sourcing fresh evidence, and the demo picks up the new run live. Set `AUTO_RETRY=false` to retry by hand with **Run the oracle again**. Each retry is a new model call.
+
+After three delays the market is **PAUSED**. Only the contract owner can then settle it:
+
+```bash
+cd oracle
+npm run manual-resolve -- nasa-extraterrestrial-life-2025 NO "Reviewed the posted sources; no definitive announcement in 2025."
+```
+
+The manual decision and its reason are emitted on-chain (`ManualResolution`).
 
 ---
 

@@ -4,7 +4,7 @@ A verifiable AI oracle for prediction markets. For each market it:
 
 1. **Reads the settlement conditions.** The market's rules (question, YES/NO conditions, notes, evidence window, accepted sources, search queries) are stored on-chain, and every decision commits to their hash.
 2. **Sources evidence from trusted outlets.** It queries The Guardian, GDELT (limited to Reuters, AP, BBC, NPR, NASA, Nature and Science) and nasa.gov, keeps only trusted domains inside the evidence window, and hashes the exact text it will show the model.
-3. **Decides.** Claude applies the rules to those sources and returns YES, NO or INSUFFICIENT_EVIDENCE, with a confidence score, a per-condition assessment and reasoning that cites source ids. **There is no stored or default answer.** If the evidence is thin, or confidence is below the market's threshold, the market is delayed and retried. After three delays it pauses for a manual decision.
+3. **Decides.** Claude applies the rules to those sources and returns YES, NO or INSUFFICIENT_EVIDENCE, with a confidence score, a per-condition assessment and reasoning that cites source ids. **There is no stored or default answer.** If the evidence is thin, or confidence is below the market's threshold, the market is delayed and the oracle automatically looks again when the on-chain delay ends. After three delays it pauses for a manual decision by the contract owner.
 4. **Signs and publishes.** The oracle signs an EIP-712 attestation binding the decision to the rules hash, the evidence hash, the decision-logic hash and the full report hash. It then posts the decision logic, every source (URL + SHA-256) and the signature to the `SettlementOracle` contract, which rejects anything that does not match.
 5. **Lets anyone verify.** The demo's **Verify independently** button works in the browser without trusting the oracle service. It recomputes every hash, rebuilds the exact model input, recovers the signer, and compares the result with the events the contract emitted. `npm run verify` does the same from the command line.
 
@@ -55,15 +55,20 @@ npm run demo                            # terminal 3: http://localhost:5173
 
 If you cloned without `--recurse-submodules`, run `git submodule update --init --recursive`.
 
+**No API keys yet?** You can still check what the oracle would find. `npm run preview-sources` (or the **Preview sources** button in the demo) runs only the sourcing step with the Guardian's public test key. Nothing is sent to a model, signed or posted.
+
 See **[BUILD_GUIDE.md](BUILD_GUIDE.md)** for the full walkthrough, configuration and deployment.
 
 ## Tests
 
 ```bash
 cd contracts && forge test      # 23 tests: settle, delay, pause, manual override, tampering, replay, signer checks
-npm test --workspace=oracle     # parsing, evidence selection, decision validation, and an end-to-end
+npm test                        # shared (10): hashing, prompt escaping, verifier tamper detection
+                                # oracle: parsing, evidence selection, decision validation, and an end-to-end
                                 # pipeline test against a local Anvil chain (needs anvil + forge build)
 ```
+
+CI (`.github/workflows/ci.yml`) runs all of the above, checks the generated ABI is current, and builds the demo.
 
 The end-to-end test swaps the news providers and the model for deterministic test doubles. The running service never uses them.
 
@@ -75,6 +80,7 @@ The end-to-end test swaps the news providers and the model for deterministic tes
 | `GET /config` | Chain id, contract, RPC URL for browser verification |
 | `GET /markets` | Market rules, on-chain state, past reports |
 | `POST /markets/:slug/resolve` | Start a resolution (returns `runId`; 503 without an Anthropic key) |
+| `POST /markets/:slug/preview-sources` | Run only sourcing and evidence selection: no model, no signature, no transaction |
 | `GET /runs/:id/events` | Live pipeline events (Server-Sent Events) |
 | `GET /reports/:id` | Full signed report (JSON) |
 | `GET /reports/:id/verify` | Server-side run of the same verifier |
@@ -83,6 +89,7 @@ The end-to-end test swaps the news providers and the model for deterministic tes
 
 - **The verification proves integrity, not correctness.** It proves which rules, sources and logic produced a decision, and that an authorized key signed it. It does not prove the model reasoned well. Anyone can read the posted logic and sources and judge that.
 - **The oracle operator is trusted to run the code as published.** Running the oracle inside a TEE (see `NOTES.md`) would extend the proof to the code and model. That is not implemented.
+- **The news integrations have not yet been run against the live APIs.** They were built from the providers' documented formats in an environment that could not reach them. Run `npm run preview-sources` first and check each provider's status.
 - **Coverage depends on the sources.** GDELT's DOC API may not return results for dates far in the past, and some outlets block automated fetches or paywall text. Every provider error is recorded in the report rather than hidden.
 - **On-chain storage.** Decision logic and source URLs live in event logs. Full source text lives in the signed report, and its hashes are on-chain.
 

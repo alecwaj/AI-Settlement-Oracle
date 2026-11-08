@@ -15,7 +15,9 @@
     "oracle": "npm run dev --workspace=oracle",
     "demo": "npm run dev --workspace=demo",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "setup": "npm install && cd contracts && forge build && cd .. && node scripts/export-abi.mjs",
+    "preview-sources": "npm run preview-sources --workspace=oracle --"
   },
   "devDependencies": {
     "typescript": "~5.9.3"

@@ -8,7 +8,9 @@
     "start": "tsx --env-file-if-exists=.env src/server.ts",
     "verify": "tsx --env-file-if-exists=.env src/cli/verify.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "manual-resolve": "tsx --env-file-if-exists=.env src/cli/manual-resolve.ts",
+    "preview-sources": "tsx --env-file-if-exists=.env src/cli/preview-sources.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.6.0",

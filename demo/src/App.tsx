@@ -4,16 +4,18 @@ import {
   getConfig,
   getMarkets,
   getReport,
+  previewSources,
   startResolution,
   subscribeRun,
   type MarketView,
   type OracleConfig,
   type PipelineEvent,
+  type SourcePreview,
 } from './api.ts';
 import { MarketCard } from './components/MarketCard.tsx';
 import { Pipeline } from './components/Pipeline.tsx';
 import { Result } from './components/Result.tsx';
-import { Sources } from './components/Sources.tsx';
+import { PreviewSources, Sources } from './components/Sources.tsx';
 import { Verification } from './components/Verification.tsx';
 import { pct } from './format.ts';
 
@@ -26,6 +28,9 @@ export default function App() {
   const [runError, setRunError] = useState<string | null>(null);
   const [report, setReport] = useState<OracleReport | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [preview, setPreview] = useState<SourcePreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
+  const runningRef = useRef(false);
   const chainOffset = useRef(0);
   const unsubscribe = useRef<(() => void) | null>(null);
 
@@ -43,6 +48,7 @@ export default function App() {
       unsubscribe.current?.();
       setEvents([]);
       setRunning(true);
+      runningRef.current = true;
       setRunError(null);
       unsubscribe.current = subscribeRun(
         runId,
@@ -56,6 +62,7 @@ export default function App() {
         },
         () => {
           setRunning(false);
+          runningRef.current = false;
           void refresh();
         },
       );
@@ -72,8 +79,18 @@ export default function App() {
       })
       .catch((err: Error) => setLoadError(err.message));
     const timer = setInterval(() => setNow(Date.now()), 1000);
+    // Poll so that automatic retries started by the service show up live.
+    const poll = setInterval(() => {
+      if (runningRef.current) return;
+      refresh()
+        .then((m) => {
+          if (m?.activeRunId && !runningRef.current) follow(m.activeRunId);
+        })
+        .catch(() => undefined);
+    }, 5000);
     return () => {
       clearInterval(timer);
+      clearInterval(poll);
       unsubscribe.current?.();
     };
   }, [refresh, follow]);
@@ -90,7 +107,22 @@ export default function App() {
     }
   }
 
-  const retryIn = market ? Number(market.onchain.delayedUntil) - (now / 1000 + chainOffset.current) : 0;
+  async function preview_(): Promise<void> {
+    if (!market) return;
+    setPreviewing(true);
+    setRunError(null);
+    try {
+      setPreview(await previewSources(market.spec.slug));
+    } catch (err) {
+      setRunError((err as Error).message);
+    } finally {
+      setPreviewing(false);
+    }
+  }
+
+  const chainNow = now / 1000 + chainOffset.current;
+  const retryIn = market ? Number(market.onchain.delayedUntil) - chainNow : 0;
+  const autoRetryIn = market?.autoRetryAt ? Math.max(0, market.autoRetryAt - chainNow) : null;
 
   return (
     <div className="app">
@@ -119,7 +151,18 @@ export default function App() {
 
       {market && config && (
         <>
-          <MarketCard market={market} config={config} running={running} retryIn={retryIn} onRun={run} runError={runError} />
+          <MarketCard
+            market={market}
+            config={config}
+            running={running}
+            retryIn={retryIn}
+            onRun={run}
+            runError={runError}
+            autoRetryIn={autoRetryIn}
+            previewing={previewing}
+            onPreview={preview_}
+          />
+          {preview && <PreviewSources preview={preview} onClose={() => setPreview(null)} />}
           {(events.length > 0 || running) && <Pipeline events={events} running={running} />}
           {report && (
             <>

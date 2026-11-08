@@ -1,4 +1,4 @@
-import type { MarketSpec, OracleReport, ProviderStatus } from '@oracle/shared';
+import type { EvidenceItem, MarketSpec, OracleReport, ProviderStatus } from '@oracle/shared';
 
 export const API = (import.meta.env.VITE_ORACLE_API as string | undefined) ?? 'http://localhost:3001';
 
@@ -9,6 +9,15 @@ export interface OracleConfig {
   oracleSigner: `0x${string}`;
   model: string;
   modelConfigured: boolean;
+  autoRetry: boolean;
+}
+
+export interface SourcePreview {
+  startedAt: string;
+  finishedAt: string;
+  log: string[];
+  providers: ProviderStatus[];
+  evidence: EvidenceItem[];
 }
 
 export interface OnChainMarketJson {
@@ -38,6 +47,9 @@ export interface MarketView {
   onchain: OnChainMarketJson;
   reports: ReportSummary[];
   activeRunId: string | null;
+  autoRetryAt: number | null;
+  autoRetryHalted: string | null;
+  manualResolution: { outcome: 'YES' | 'NO'; reason: string; txHash: string } | null;
   chainTime: string;
 }
 
@@ -64,6 +76,9 @@ export const getReport = (id: string): Promise<OracleReport> =>
   fetch(`${API}/reports/${encodeURIComponent(id)}`).then((r) => json<OracleReport>(r));
 export const startResolution = (slug: string): Promise<{ runId: string }> =>
   fetch(`${API}/markets/${encodeURIComponent(slug)}/resolve`, { method: 'POST' }).then((r) => json<{ runId: string }>(r));
+
+export const previewSources = (slug: string): Promise<SourcePreview> =>
+  fetch(`${API}/markets/${encodeURIComponent(slug)}/preview-sources`, { method: 'POST' }).then((r) => json<SourcePreview>(r));
 
 export function subscribeRun(runId: string, onEvent: (e: PipelineEvent) => void, onEnd: () => void): () => void {
   const es = new EventSource(`${API}/runs/${runId}/events`);

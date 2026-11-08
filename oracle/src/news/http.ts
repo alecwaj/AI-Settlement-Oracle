@@ -31,7 +31,7 @@ export async function httpGet(
     return { status: res.status, body, contentType: res.headers.get('content-type') ?? '' };
   } catch (err) {
     if (err instanceof HttpError) throw err;
-    const reason = controller.signal.aborted ? `timed out after ${timeoutMs}ms` : (err as Error).message;
+    const reason = controller.signal.aborted ? `timed out after ${timeoutMs}ms` : networkReason(err);
     throw new HttpError(`request to ${safeHost(url)} failed: ${reason}`, null);
   } finally {
     clearTimeout(timer);
@@ -45,6 +45,13 @@ export async function httpGetJson<T>(url: string, timeoutMs: number, headers: Re
   } catch {
     throw new HttpError(`invalid JSON from ${safeHost(url)}: ${body.slice(0, 120).replace(/\s+/g, ' ')}`, null);
   }
+}
+
+/** Node's fetch reports "fetch failed" and keeps the real network error in `cause`. */
+function networkReason(err: unknown): string {
+  const e = err as Error & { cause?: { code?: string; message?: string } };
+  const cause = e.cause?.code ?? e.cause?.message;
+  return cause ? `${e.message} (${cause})` : e.message;
 }
 
 function safeHost(url: string): string {

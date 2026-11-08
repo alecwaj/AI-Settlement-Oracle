@@ -2,9 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { Response } from 'express';
 import type { PipelineEvent } from './pipeline.ts';
 
+export type RunTrigger = 'manual' | 'auto';
+
 export interface Run {
   id: string;
   slug: string;
+  trigger: RunTrigger;
   startedAt: string;
   status: 'running' | 'succeeded' | 'failed';
   reportId: string | null;
@@ -29,10 +32,16 @@ export class RunManager {
     return [...this.runs.values()].filter((r) => r.slug === slug).sort((a, b) => b.startedAt.localeCompare(a.startedAt))[0];
   }
 
-  start(slug: string, work: (emit: (e: Omit<PipelineEvent, 'seq' | 'at'>) => void) => Promise<string>): Run {
+  start(
+    slug: string,
+    trigger: RunTrigger,
+    work: (emit: (e: Omit<PipelineEvent, 'seq' | 'at'>) => void) => Promise<string>,
+    onDone?: (run: Run) => void,
+  ): Run {
     const run: Run = {
       id: randomUUID(),
       slug,
+      trigger,
       startedAt: new Date().toISOString(),
       status: 'running',
       reportId: null,
@@ -61,6 +70,7 @@ export class RunManager {
       .finally(() => {
         for (const res of this.subscribers.get(run.id) ?? []) res.end();
         this.subscribers.delete(run.id);
+        onDone?.(run);
       });
     return run;
   }
