@@ -1,0 +1,34 @@
+# Phala Cloud (dstack, Intel TDX) deployment for the AI Settlement Oracle.
+#
+#   phala login
+#   phala deploy -n ai-settlement-oracle -c deploy/phala/docker-compose.yml -e deploy/phala/.env --wait
+#
+# Everything in this file is measured: its hash becomes the app's compose_hash (extended into RTMR3 and
+# reported by GET /attestation). Values passed with `-e` are encrypted client-side to the CVM's KMS key,
+# so ANTHROPIC_API_KEY is never visible to Phala, the host, or the node operator.
+#
+# Replace the image tag with the immutable digest you pushed (…/ai-settlement-oracle@sha256:…) before a
+# production deploy; a mutable tag weakens what the attestation proves.
+services:
+  oracle:
+    image: ghcr.io/alecwaj/ai-settlement-oracle:1.0.0
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - oracle-data:/data
+    environment:
+      TEE_MODE: dstack
+      LLM_MODE: anthropic
+      ANTHROPIC_MODEL: claude-opus-5-5
+      ANTHROPIC_EFFORT: high
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      RPC_URL: ${RPC_URL}
+      CONTRACT_ADDRESS: ${CONTRACT_ADDRESS}
+      AUTO_SUBMIT: "true"
+      WATCH_INTERVAL_MS: "15000"
+      DATA_DIR: /data
+
+volumes:
+  oracle-data:

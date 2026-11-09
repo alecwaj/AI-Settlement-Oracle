@@ -1,18 +1,24 @@
 {
   "name": "ai-settlement-oracle",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "private": true,
+  "type": "module",
   "workspaces": [
     "oracle",
-    "demo",
-    "shared"
+    "demo"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace=oracle & npm run dev --workspace=demo",
-    "test": "npm run test --workspace=oracle && forge test",
-    "build": "npm run build --workspaces"
+    "build:contracts": "cd contracts && forge build && cd .. && node scripts/export-abi.mjs",
+    "demo:deploy": "tsx scripts/demo-deploy.ts",
+    "demo:seed": "tsx scripts/demo-seed.ts",
+    "demo:warp": "tsx scripts/warp.ts",
+    "dev:oracle": "npm run dev -w oracle",
+    "dev:demo": "npm run dev -w demo",
+    "test": "cd contracts && forge test && cd .. && npm test -w oracle"
   },
   "devDependencies": {
-    "typescript": "^5.3.0"
+    "typescript": "^5.3.0",
+    "tsx": "^4.7.0",
+    "viem": "^2.43.3"
   }
 }
