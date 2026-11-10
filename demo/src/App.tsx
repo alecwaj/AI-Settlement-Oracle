@@ -222,8 +222,11 @@ function TeeBadge({ att }: { att: Attestation | null }) {
     );
   const inference =
     att.llm.provider === 'confidential' ? (
-      <span className={`badge ${att.llm.requireAttestedInference ? 'ok' : 'warn'}`} title={att.llm.gateway ?? ''}>
-        {att.llm.requireAttestedInference ? '🔐' : '🧪'} Inference: Confidential AI enclave
+      <span
+        className={`badge ${att.llm.requireAttestedInference ? 'ok' : 'warn'}`}
+        title={att.llm.requireAttestedInference ? `verified via ${att.llm.gateway}` : 'Runs on Confidential AI TEE infrastructure; this oracle does not yet verify the attestation'}
+      >
+        {att.llm.requireAttestedInference ? '🔐 Inference: Confidential AI enclave (verified)' : '🟡 Inference: Confidential AI (attestation not yet verified)'}
       </span>
     ) : (
       <span className="badge bad">⚠️ Inference: {att.llm.provider}, not attested</span>

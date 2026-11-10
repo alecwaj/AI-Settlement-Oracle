@@ -11,7 +11,7 @@ This is a working MVP of ORA's [*AI Settlement Oracle: Resolving to Truth*](http
 
 **60-second tour**
 
-1. **Look at the two badges under the title.** The oracle runs in an Intel TDX enclave, and the model runs in Confidential AI's confidential-GPU enclave.
+1. **Look at the two badges under the title.** The oracle runs in an Intel TDX enclave, and the model runs on Confidential AI's confidential-GPU infrastructure. An amber inference badge means the oracle isn't yet verifying that enclave itself (see [Verification levels](#verification-levels)).
 2. **Open market #1 (NASA 2025).** It's been proposed, disputed twice and escalated, with NASA press releases staked as evidence on both sides. Read the AI's verdict, its confidence, and how it rated each piece of evidence.
 3. **Click "🔍 Verify this resolution".** Your browser re-checks everything itself:
    - the signed digest;
@@ -67,7 +67,7 @@ Instructions for B and C are under [Run it locally](#run-it-locally).
 |---|---|
 | Contract: optimistic proposals, single/double challenge, evidence staking, AI resolution, delay with manual fallback, reward/slash payouts | ✅ 15 Foundry tests |
 | Oracle: evidence fetching, AI arbiter, EIP-712 signing, TDX quotes, inference-enclave attestation, rate limits and spend cap, watcher | ✅ 18 unit tests, plus end-to-end runs |
-| Verifiable inference: [Confidential AI](https://confidential.ai/docs) serving **`deepseek-ai/DeepSeek-V4.1-Flash-1017`**, gated by TEErminator | ✅ Integrated and fail-closed. Awaiting production pins and an API key. |
+| Verifiable inference: [Confidential AI](https://confidential.ai/docs) serving **`deepseek-ai/DeepSeek-V4.1-Flash-1017`**, gated by TEErminator | ✅ Integrated. Launches in *unverified-inference* mode with just an API key, and switches to *verified* (fail-closed) once Confidential AI's reviewed pins are set. |
 | Demo UI: reviewer tour, read-only mode, deep links, verdicts read from the chain if the oracle is down, in-browser verification | ✅ |
 | Deployment: Phala Cloud compose, Docker image (built by CI), Base Sepolia deploy/seed scripts, Vercel config | ✅ Ready |
 | On-chain verification of TDX quotes | 🔜 Roadmap (quote hashes are anchored on-chain today) |
@@ -205,6 +205,15 @@ What remains trusted:
 - **Confidentiality comes free.** API keys, prompts and evidence stay encrypted in memory. Even the infrastructure provider can't read or tamper with them while they're processed.
 - **Ordinary engineering.** It's a Docker container and a compose file. There are no circuits to build and no challenge games to run, and an upgrade is a redeploy plus re-registering the new signer.
 - **Fails closed.** If the hardware evidence, the measurements or the model pin doesn't match, the oracle signs nothing and the market waits. It never settles on unverified output.
+
+### Verification levels
+
+| Mode | What you get | What it needs |
+|---|---|---|
+| **Unverified inference** (launch default) | The oracle enclave, its signing key, signed transcripts and in-browser checks all work. Inference runs on Confidential AI's TEE platform, but the oracle takes that on trust. The badge and every resolution record say so. | A Confidential AI API key |
+| **Verified inference** | Before any prompt is sent, TEErminator checks Confidential AI's hardware attestation against reviewed measurements, including the policy that pins DeepSeek's weights. The oracle signs nothing unless the check passes. | The key, plus Confidential AI's reviewed pins in `deploy/phala/docker-compose.yml`, with `REQUIRE_ATTESTED_INFERENCE: "true"` |
+
+The mode is set in the measured compose file, so anyone verifying the oracle's quote can see which mode is live.
 
 ### How a third party verifies a resolution
 

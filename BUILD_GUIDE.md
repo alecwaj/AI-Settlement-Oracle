@@ -120,7 +120,9 @@ docker buildx imagetools inspect ghcr.io/<owner>/ai-settlement-oracle:1.0.0   # 
 
 Edit `deploy/phala/docker-compose.yml` to reference `image: ghcr.io/<owner>/ai-settlement-oracle@sha256:<digest>`. The compose file is what the TEE measures, so a digest (rather than a mutable tag) is what makes the attestation meaningful.
 
-### 3.2 Fill in the inference-enclave pins
+### 3.2 Fill in the inference-enclave pins (for verified mode)
+
+**Optional for launch.** The compose file ships with `REQUIRE_ATTESTED_INFERENCE: "false"`. In that mode the container skips TEErminator, calls `https://api.confidential.ai/v1` directly, and labels inference as unverified. Do the steps below when Confidential AI sends the reviewed values, then set `REQUIRE_ATTESTED_INFERENCE: "true"` and redeploy.
 
 Fill in the `REPLACE_WITH_…` values in `TEERMINATOR_REMOTE_ARGS` in `deploy/phala/docker-compose.yml` with the reviewed values for Confidential AI's current release: MRTD, RTMR1/RTMR2 and the RTMR3 seed. Also confirm the `--pin-policy` allowlist digest:
 

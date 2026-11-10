@@ -43,10 +43,11 @@ export function ResolutionPanel({ contract, record: r, att }: { contract: Addres
 
       // 5. Inference ran in an attested enclave on pinned open weights
       const inf = r.inference;
+      const gatewayOff = inf.provider === 'confidential' && !inf.gateway?.checked;
       out.push({
         label: inf.provider === 'confidential' ? 'Inference enclave verified (TEErminator)' : 'Inference enclave attested',
-        ok: inf.attested,
-        detail: inf.attested ? `gateway ${inf.gateway?.verdict}` : inf.reason,
+        ok: inf.attested ? true : gatewayOff ? null : false,
+        detail: inf.attested ? `gateway ${inf.gateway?.verdict}` : gatewayOff ? 'not checked in this deployment (unverified-inference mode)' : inf.reason,
       });
       if (inf.provider === 'confidential') {
         out.push({
@@ -176,8 +177,8 @@ export function ResolutionPanel({ contract, record: r, att }: { contract: Addres
       {checks && (
         <ul className="checks">
           {checks.map((c) => (
-            <li key={c.label} className={c.ok ? 'ok' : 'bad'}>
-              {c.ok ? '✓' : '✗'} {c.label} <span className="muted small">{c.detail}</span>
+            <li key={c.label} className={c.ok ? 'ok' : c.ok === null ? 'na' : 'bad'}>
+              {c.ok ? '✓' : c.ok === null ? '–' : '✗'} {c.label} <span className="muted small">{c.detail}</span>
             </li>
           ))}
         </ul>

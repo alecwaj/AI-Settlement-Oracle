@@ -82,3 +82,4 @@ footer { text-align: center; }
 .tour { padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 0.92rem; }
 .guide-toggle { align-self: flex-start; }
 button.link { background: none; border: none; padding: 0; color: var(--accent); font-weight: 600; text-decoration: underline; }
+.checks .na { color: var(--warn); }

@@ -49,8 +49,8 @@ export function ReviewerGuide({ onOpenMarket, hasMarkets }: { onOpenMarket: (id:
       </p>
       <ol className="tour">
         <li>
-          <b>Check the two badges under the title.</b> The oracle runs in an Intel TDX enclave, and the model (DeepSeek V4.1 Flash, open weights) runs in Confidential AI's
-          confidential-GPU enclave.
+          <b>Check the two badges under the title.</b> The oracle runs in an Intel TDX enclave, and the model (DeepSeek V4.1 Flash, open weights) runs on Confidential AI's
+          confidential-GPU infrastructure. The inference badge turns green once the oracle verifies that enclave's attestation itself.
         </li>
         <li>
           <b>Open the NASA market.</b> It was proposed, disputed twice, and escalated. Staked participants submitted NASA press releases as evidence on both sides.
