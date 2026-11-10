@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { keccak256, recoverAddress, toBytes, type Address } from 'viem';
-import { abi, ORACLE_URL, publicClient, short, type Attestation, type ResolutionRecord } from './lib';
+import { abi, explorerLink, ORACLE_URL, publicClient, short, type Attestation, type ResolutionRecord } from './lib';
 
 type Check = { label: string; ok: boolean | null; detail: string };
 
@@ -146,7 +146,15 @@ export function ResolutionPanel({ contract, record: r, att }: { contract: Addres
             </a>
           </dd>
           <dt>Tx</dt>
-          <dd className="mono">{r.txHash ?? '—'}</dd>
+          <dd className="mono">
+            {r.txHash && explorerLink('tx', r.txHash) ? (
+              <a href={explorerLink('tx', r.txHash)!} target="_blank" rel="noreferrer">
+                {r.txHash}
+              </a>
+            ) : (
+              (r.txHash ?? '—')
+            )}
+          </dd>
           {r.quote && (
             <>
               <dt>TDX quote</dt>

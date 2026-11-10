@@ -5,8 +5,8 @@ MVP of ORA's "AI Settlement Oracle" design: an optimistic-oracle prediction mark
 ## Layout
 - `contracts/`: Foundry. `src/SettlementOracle.sol` (single contract), `test/SettlementOracle.t.sol`, `script/Deploy.s.sol`. Deps are git submodules in `contracts/lib`.
 - `oracle/`: Node 20+/TypeScript ESM (NodeNext). `tee.ts` (dstack key + quotes, dev fallback), `inference-attestation.ts` (TEErminator verdict + allowlist model pins), `resolver.ts` (ConfidentialResolver via `openai` SDK + strict json_schema; AnthropicResolver; MockResolver), `evidence.ts`, `oracle.ts` (orchestration + watcher), `server.ts` (Express).
-- `demo/`: Vite + React + viem (no wagmi).
-- `scripts/`: local demo (`demo-deploy`, `demo-seed`, `warp`, `export-abi.mjs`).
+- `demo/`: Vite + React + viem (no wagmi). Reviewer tour, read-only mode, `?market=N` deep links, on-chain verdict fallback. Hosted on Vercel (`demo/vercel.json`).
+- `scripts/`: `deploy.ts` / `seed.ts` (`--network local|base-sepolia`, profiles in `lib.ts`), `warp.ts`, `export-abi.mjs`.
 - `deploy/phala/docker-compose.yml`: TEE deployment. `oracle/Dockerfile` uses the repo root as build context.
 
 ## Commands

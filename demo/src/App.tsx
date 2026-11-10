@@ -2,7 +2,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { isAddress, type Address } from 'viem';
 import {
   abi,
+  canWrite,
+  CHAIN_NAME,
   DEV_ACCOUNTS,
+  explorerLink,
   DEV_LABELS,
   oracle,
   publicClient,
@@ -13,8 +16,15 @@ import {
   walletFor,
   type Attestation,
   type Signer,
+  ZERO_ADDRESS,
 } from './lib';
 import { MarketView, type Market } from './MarketView';
+import { ReviewerGuide } from './ReviewerGuide';
+
+function initialMarket(): bigint | null {
+  const m = new URLSearchParams(window.location.search).get('market');
+  return m && /^\d+$/.test(m) ? BigInt(m) : null;
+}
 
 export default function App() {
   const [contract, setContract] = useState<Address | null>((import.meta.env.VITE_CONTRACT_ADDRESS as Address) ?? null);
@@ -23,14 +33,23 @@ export default function App() {
   const [chainTime, setChainTime] = useState<bigint>(0n);
   const [signer, setSigner] = useState<Signer>({ kind: 'dev', index: 2 });
   const [markets, setMarkets] = useState<Array<{ id: bigint; m: Market }>>([]);
-  const [selected, setSelected] = useState<bigint | null>(null);
+  const [selected, setSelectedState] = useState<bigint | null>(initialMarket);
+  const setSelected = useCallback((id: bigint | null) => {
+    setSelectedState(id);
+    const url = new URL(window.location.href);
+    if (id === null) url.searchParams.delete('market');
+    else url.searchParams.set('market', id.toString());
+    window.history.replaceState(null, '', url);
+  }, []);
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const refresh = useCallback(() => setTick((t) => t + 1), []);
 
   // Oracle identity + contract discovery
   useEffect(() => {
-    oracle<Attestation>('/attestation').then(setAtt).catch(() => setError('Oracle not reachable — start it with `npm run dev:oracle`.'));
+    oracle<Attestation>('/attestation')
+      .then(setAtt)
+      .catch(() => setError('The oracle service is not reachable right now. On-chain data is still shown, and each verdict is read from the chain.'));
     if (!contract) {
       oracle<{ contract: Address | null }>('/health')
         .then((h) => h.contract && isAddress(h.contract) && setContract(h.contract))
@@ -47,7 +66,7 @@ export default function App() {
         if (cancelled) return;
         setChainId(id);
         setChainTime(block.timestamp);
-        if (id !== 31337) setSigner((s) => (s.kind === 'dev' ? { kind: 'injected', address: '0x0000000000000000000000000000000000000000' } : s));
+        if (id !== 31337) setSigner((s) => (s.kind === 'dev' ? { kind: 'injected', address: ZERO_ADDRESS } : s));
         if (!contract) return;
         const count = await publicClient.readContract({ address: contract, abi, functionName: 'marketCount' });
         const list = await Promise.all(
@@ -94,6 +113,8 @@ export default function App() {
         <TeeBadge att={att} />
       </header>
 
+      <ReviewerGuide onOpenMarket={(id) => setSelected(id)} hasMarkets={markets.length > 0} />
+
       <section className="bar">
         <div>
           <span className="label">Acting as</span>
@@ -110,13 +131,28 @@ export default function App() {
               <option value="injected">Browser wallet…</option>
             </select>
           ) : (
-            <button onClick={connectInjected}>{signer.kind === 'injected' && signer.address !== '0x0000000000000000000000000000000000000000' ? short(signer.address, 4) : 'Connect wallet'}</button>
+            <>
+              <button className="ghost" onClick={connectInjected}>
+                {canWrite(signer) ? short(signerAddress(signer), 4) : 'Connect wallet (optional)'}
+              </button>
+              {!canWrite(signer) && <span className="muted small"> read-only: no wallet needed to explore & verify</span>}
+            </>
           )}
         </div>
         <div className="muted small">
-          {chainId !== null && <>chain {chainId} · </>}
+          {chainId !== null && <>{CHAIN_NAME ?? `chain ${chainId}`} · </>}
           {chainTime > 0n && <>chain time {new Date(Number(chainTime) * 1000).toLocaleString()} · </>}
-          {contract ? <>contract {short(contract, 4)}</> : 'no contract'}
+          {contract ? (
+            explorerLink('address', contract) ? (
+              <a href={explorerLink('address', contract)!} target="_blank" rel="noreferrer">
+                contract {short(contract, 4)}
+              </a>
+            ) : (
+              <>contract {short(contract, 4)}</>
+            )
+          ) : (
+            'no contract'
+          )}
         </div>
         {chainId === 31337 && (
           <div className="row">
@@ -138,6 +174,7 @@ export default function App() {
           id={selectedMarket.id}
           market={selectedMarket.m}
           signer={signer}
+          canWrite={canWrite(signer)}
           chainTime={chainTime}
           att={att}
           onBack={() => setSelected(null)}
@@ -159,12 +196,15 @@ export default function App() {
               </button>
             ))}
           </section>
-          {contract && <CreateMarket contract={contract} signer={signer} onCreated={refresh} onError={setError} />}
+          {contract && canWrite(signer) && <CreateMarket contract={contract} signer={signer} onCreated={refresh} onError={setError} />}
         </>
       )}
 
       <footer className="muted small">
-        Signer {att ? short(att.signer, 4) : '…'} · model {att?.llm.model ?? '…'} · acting address {short(signerAddress(signer), 4)}
+        Enclave signer {att ? short(att.signer, 4) : '…'} · model {att?.llm.model ?? '…'} ·{' '}
+        <a href="https://github.com/alecwaj/AI-Settlement-Oracle" target="_blank" rel="noreferrer">
+          source & docs
+        </a>
       </footer>
     </div>
   );

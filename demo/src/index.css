@@ -78,3 +78,7 @@ details[open] summary { margin-bottom: 8px; }
 .checks .ok { color: var(--ok); } .checks .bad { color: var(--bad); }
 footer { text-align: center; }
 @media (max-width: 600px) { .kv { grid-template-columns: 1fr; } td.uri { max-width: 140px; } }
+.guide p { margin-bottom: 10px; font-size: 0.92rem; }
+.tour { padding-left: 20px; display: flex; flex-direction: column; gap: 8px; font-size: 0.92rem; }
+.guide-toggle { align-self: flex-start; }
+button.link { background: none; border: none; padding: 0; color: var(--accent); font-weight: 600; text-decoration: underline; }

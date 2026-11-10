@@ -48,6 +48,10 @@ services:
       RPC_URL: ${RPC_URL}
       CONTRACT_ADDRESS: ${CONTRACT_ADDRESS}
       AUTO_SUBMIT: "true"
+      # Public-demo safeguards for the operator's inference key.
+      MAX_AI_CALLS_PER_DAY: "50"
+      RESOLVE_RATE_LIMIT_PER_HOUR: "10"
+      ALLOWED_ORIGINS: "*"            # or your Vercel URL, e.g. https://ai-settlement-oracle.vercel.app
       WATCH_INTERVAL_MS: "15000"
       DATA_DIR: /data
 

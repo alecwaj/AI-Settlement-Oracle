@@ -27,6 +27,7 @@ import { fetchEvidence, type FetchedEvidence } from './evidence.js';
 import { verdictLabel, type Decision, type Resolver } from './resolver.js';
 import type { Quote, TeeIdentity } from './tee.js';
 import type { InferenceAttestation } from './inference-attestation.js';
+import { DailyBudget } from './rate-limit.js';
 
 export const Status = { Open: 0, Proposed: 1, Escalated: 2, Resolved: 3, PausedForManual: 4 } as const;
 export const OutcomeCode = { None: 0, YES: 1, NO: 2, INVALID: 3 } as const;
@@ -104,6 +105,7 @@ export class SettlementOracleService {
   private readonly inflight = new Set<string>();
   private readonly lastAttempt = new Map<string, number>();
   private timer: NodeJS.Timeout | null = null;
+  readonly budget: DailyBudget;
 
   constructor(
     private readonly cfg: OracleConfig,
@@ -112,6 +114,7 @@ export class SettlementOracleService {
     private readonly attestInference: () => Promise<InferenceAttestation>,
   ) {
     this.publicClient = createPublicClient({ transport: http(cfg.rpcUrl) });
+    this.budget = new DailyBudget(cfg.maxAiCallsPerDay);
     this.load();
   }
 
@@ -183,6 +186,9 @@ export class SettlementOracleService {
     if (this.cfg.requireAttestedInference && !inference.attested) {
       throw new Error(`Inference enclave not verified — refusing to resolve: ${inference.reason}`);
     }
+
+    // Spend guard on the operator's inference key (covers both the watcher and manual triggers).
+    if (!this.budget.tryConsume()) throw new Error('Daily AI call budget exhausted; try again tomorrow (UTC)');
 
     const round = market.aiRound;
     const result = await this.resolver.resolve({

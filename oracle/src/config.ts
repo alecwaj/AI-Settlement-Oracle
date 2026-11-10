@@ -30,6 +30,9 @@ export interface OracleConfig {
   watchIntervalMs: number;
   allowPrivateEvidenceHosts: boolean;
   dataDir: string | undefined;
+  maxAiCallsPerDay: number;
+  resolveRateLimitPerHour: number;
+  allowedOrigins: string[] | '*';
 }
 
 function bool(v: string | undefined, fallback: boolean): boolean {
@@ -87,5 +90,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): OracleConfig {
     watchIntervalMs: Number(env.WATCH_INTERVAL_MS ?? 15_000),
     allowPrivateEvidenceHosts: bool(env.ALLOW_PRIVATE_EVIDENCE_HOSTS, false),
     dataDir: env.DATA_DIR || undefined,
+    maxAiCallsPerDay: Number(env.MAX_AI_CALLS_PER_DAY ?? 50),
+    resolveRateLimitPerHour: Number(env.RESOLVE_RATE_LIMIT_PER_HOUR ?? 10),
+    allowedOrigins: env.ALLOWED_ORIGINS ? env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean) : '*',
   };
 }

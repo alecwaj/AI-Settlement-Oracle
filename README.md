@@ -1,25 +1,80 @@
 # AI Settlement Oracle
 
-**Prediction-market resolution in which an open-weight AI model settles the disputes humans can't. It runs inside hardware enclaves, so every verdict can be traced to the exact code and the exact model weights that produced it.**
+**Prediction markets that settle their hardest disputes with an AI judge whose every verdict can be checked. The code and the model weights both run inside hardware enclaves (TEEs), so nobody, including the operator, can fake a result.**
 
-This repo is a working MVP of the design in ORA's [*AI Settlement Oracle: Resolving to Truth*](https://paragraph.com/@orablog/ai-settlement-oracle).
+This is a working MVP of ORA's [*AI Settlement Oracle: Resolving to Truth*](https://paragraph.com/@orablog/ai-settlement-oracle) design. Ordinary markets resolve the usual optimistic way. When a market is **disputed twice**, staked participants submit evidence, and an open-weight model (DeepSeek V4.1 Flash) running in a confidential-GPU enclave decides. Its signed verdict pays out the side that was right.
 
-- **What stays the same:** the optimistic-oracle flow that already works for ordinary markets.
-- **What changes:** when a market is disputed twice, the final decision moves from a token-holder vote to a verifiable AI arbiter.
-- **How it's verified:** trusted execution environments (TEEs). These hardware-isolated enclaves prove which code and which model weights produced each verdict, and keep the signing key out of the operator's reach.
+## 🔗 Live demo
 
-| Component | Status |
-|---|---|
-| Solidity contract: optimistic proposals, single/double challenge, evidence staking, AI resolution, delay with manual fallback, reward/slash payouts | ✅ 15 Foundry tests |
-| Oracle service: evidence fetching, AI arbiter (structured output), EIP-712 signing, TDX quotes, inference-enclave attestation, on-chain submission, watcher | ✅ 16 unit tests, plus an end-to-end run on anvil |
-| Verifiable inference: [Confidential AI](https://confidential.ai/docs) enclaves serving **`deepseek-ai/DeepSeek-V4.1-Flash-1017`**, gated by TEErminator | ✅ Integrated and fail-closed (see [Deploying](#deploying-into-the-tees) for the pins you need) |
-| Demo UI: full market lifecycle, evidence submission, AI rounds, in-browser verification of every resolution | ✅ |
-| TEE deployment: Phala Cloud compose, Dockerfile with pinned TEErminator, CI image build | ✅ Ready to deploy |
-| On-chain verification of TDX quotes | 🔜 Roadmap (quote hashes are anchored on-chain; quotes are verified off-chain today) |
+> **Live demo:** _going live as soon as Confidential AI API access is confirmed. The link will be posted here._
+> The demo needs no install, no wallet and no API key.
+
+**60-second tour**
+
+1. **Look at the two badges under the title.** The oracle runs in an Intel TDX enclave, and the model runs in Confidential AI's confidential-GPU enclave.
+2. **Open market #1 (NASA 2025).** It's been proposed, disputed twice and escalated, with NASA press releases staked as evidence on both sides. Read the AI's verdict, its confidence, and how it rated each piece of evidence.
+3. **Click "🔍 Verify this resolution".** Your browser re-checks everything itself:
+   - the signed digest;
+   - the enclave signer and its on-chain registration;
+   - the inference-enclave attestation and the pinned model weights;
+   - the hash of the full transcript of what the model saw and said.
+4. *Optional:* connect a wallet with Base Sepolia test ETH and walk market #3 through propose → dispute → dispute → evidence.
 
 ---
 
-## The problem
+## Understand it in 5 minutes
+
+**The problem.** Prediction markets settle easy questions with a price feed. Fuzzy questions end up decided by token-holder votes. For example: *"Did NASA find definitive evidence of extraterrestrial life in 2025?"* Is a "potential biosignature" definitive? Votes can be bought, and voters are paid for agreeing with the majority rather than for being right.
+
+**The fix.** Keep the optimistic flow for normal markets. Send only twice-disputed markets to an AI arbiter that:
+
+- reads the market's exact criteria and every staked piece of evidence;
+- returns a verdict, a calibrated confidence and an auditable rationale;
+- **delays instead of guessing** when its confidence is low, by reopening the evidence window.
+
+**Why you can trust the verdict (TEEs).**
+
+| Claim | How it's enforced |
+|---|---|
+| The oracle can't be tampered with | It runs in an Intel TDX enclave. Its signing key is generated inside and never leaves, and a hardware quote binds that key to the exact code. |
+| The model is the one advertised | Inference runs in Confidential AI's enclaves. Their attested policy pins the model repository, revision and weight hash, and the oracle refuses to sign unless that attestation verifies. |
+| Nothing was edited after the fact | The exact evidence, prompt and model response are hashed into the signed verdict, and the contract checks the signature. |
+
+**Where to look in the code**
+
+| If you want to see… | Open |
+|---|---|
+| The market lifecycle, payouts and signature checks | [`contracts/src/SettlementOracle.sol`](contracts/src/SettlementOracle.sol) |
+| One AI round end to end | [`oracle/src/oracle.ts`](oracle/src/oracle.ts) (`doResolve`) |
+| The prompt and output schema | [`oracle/src/resolver.ts`](oracle/src/resolver.ts) |
+| Enclave key and quotes | [`oracle/src/tee.ts`](oracle/src/tee.ts) |
+| Inference-enclave attestation | [`oracle/src/inference-attestation.ts`](oracle/src/inference-attestation.ts) |
+| In-browser verification | [`demo/src/ResolutionPanel.tsx`](demo/src/ResolutionPanel.tsx) |
+
+## Test it yourself
+
+| Option | Setup | What you get |
+|---|---|---|
+| **A. Live demo** | None. Open the link above. | The real thing: both enclaves, real model verdicts, verification in your browser |
+| **B. Local, no keys** | Node 20+ and Foundry, about 5 minutes | The full flow on a local chain, with a clearly labeled **mock** model standing in for the AI |
+| **C. Local, real verifiable inference** | B plus a Confidential AI API key (plus TEErminator for attestation) | Real DeepSeek V4.1 Flash verdicts from your machine |
+
+Instructions for B and C are under [Run it locally](#run-it-locally).
+
+## Status
+
+| Component | Status |
+|---|---|
+| Contract: optimistic proposals, single/double challenge, evidence staking, AI resolution, delay with manual fallback, reward/slash payouts | ✅ 15 Foundry tests |
+| Oracle: evidence fetching, AI arbiter, EIP-712 signing, TDX quotes, inference-enclave attestation, rate limits and spend cap, watcher | ✅ 18 unit tests, plus end-to-end runs |
+| Verifiable inference: [Confidential AI](https://confidential.ai/docs) serving **`deepseek-ai/DeepSeek-V4.1-Flash-1017`**, gated by TEErminator | ✅ Integrated and fail-closed. Awaiting production pins and an API key. |
+| Demo UI: reviewer tour, read-only mode, deep links, verdicts read from the chain if the oracle is down, in-browser verification | ✅ |
+| Deployment: Phala Cloud compose, Docker image (built by CI), Base Sepolia deploy/seed scripts, Vercel config | ✅ Ready |
+| On-chain verification of TDX quotes | 🔜 Roadmap (quote hashes are anchored on-chain today) |
+
+---
+
+## Deep dive: the problem
 
 Most prediction markets resolve through an **optimistic oracle**. Polymarket uses UMA, for example. Someone proposes an outcome and posts a bond. If nobody disputes it within the liveness window (about 2 hours on UMA), the outcome is final. Disputed markets go to a vote of UMA token holders.
 
@@ -167,43 +222,55 @@ The demo UI's **🔍 Verify this resolution** button runs steps 1–6 in your br
 
 ---
 
-## Quickstart (local)
+## Run it locally
 
-You'll need Node 20+, [Foundry](https://book.getfoundry.sh/), and a Confidential AI API key. To get a key, email hello@confidential.ai or use [request access](https://confidential.ai/request-access). Without a key, use `LLM_MODE=anthropic` or `LLM_MODE=mock`.
+You need Node 20+ and [Foundry](https://book.getfoundry.sh/).
 
 ```bash
 git clone --recurse-submodules https://github.com/alecwaj/AI-Settlement-Oracle && cd AI-Settlement-Oracle
 npm install
-npm run build:contracts          # forge build + export ABI to oracle/ and demo/
-
-anvil                            # terminal 1: local chain
-npm run demo:deploy              # short demo timings; writes deployments/local.json
-
-cp oracle/.env.example oracle/.env   # set CONFIDENTIAL_API_KEY
-npm run dev:oracle               # terminal 2
-
-npm run demo:seed                # registers the oracle signer; seeds an escalated NASA market + an open market
-npm run dev:demo                 # terminal 3: http://localhost:5173
+npm run build:contracts              # forge build + export ABI to oracle/ and demo/
 ```
 
-Locally, the oracle runs with `TEE_MODE=dev` and `REQUIRE_ATTESTED_INFERENCE=false`. The UI shows amber and red badges so this is never mistaken for production. For the attested inference path on your machine, run TEErminator locally and set `TEERMINATOR_BIN`; see [BUILD_GUIDE §1](BUILD_GUIDE.md#attested-inference-locally-teerminator). To exercise the dstack code path, use `npx phala simulator start`.
+**Option B: no keys (mock model).** Use three terminals:
 
-Demo walkthrough:
+```bash
+anvil                                                    # 1: local chain
+npm run demo:deploy                                      # deploys with short demo timings
 
-1. Open market **#1 (NASA 2025)**. It has already been proposed, disputed twice, and has three staked evidence submissions: NASA's September 2025 "potential biosignature" release and its January 2025 Bennu sample release.
-2. Click **⏩ +5 min** to close the evidence window. The watcher resolves the market within seconds, or you can click **Request AI resolution**.
-3. Read the verdict, confidence, evidence assessment and reasoning. Then click **Verify this resolution**.
-4. Walk market **#2** through the full flow by switching accounts in *Acting as*.
+cp oracle/.env.example oracle/.env                       # 2: then set LLM_MODE=mock in oracle/.env
+npm run dev:oracle
 
-## Deploying into the TEEs
+npm run demo:seed                                        # 3: seeds the NASA, K2-18b and open markets
+npm run dev:demo                                         #    then open http://localhost:5173
+```
 
-The full runbook is in [BUILD_GUIDE.md §3](BUILD_GUIDE.md#3-deploy-the-oracle-into-a-tee-phala-cloud). In summary:
+**Option C: real verifiable inference.** Get a key from hello@confidential.ai, then in `oracle/.env` set `LLM_MODE=confidential` and `CONFIDENTIAL_API_KEY=…`.
 
-1. Deploy `SettlementOracle` (`forge script script/Deploy.s.sol`).
+- **Quick smoke test (no attestation):** also set `CONFIDENTIAL_BASE_URL=https://api.confidential.ai/v1`.
+- **Attested path:** run TEErminator locally and set `TEERMINATOR_BIN`. See [BUILD_GUIDE §1](BUILD_GUIDE.md#attested-inference-locally-teerminator).
+
+**Walkthrough.** Locally, the *Acting as* menu switches between test accounts, and the **⏩** buttons fast-forward chain time.
+
+1. Open market **#1 (NASA 2025)** and click **⏩ +5 min** to close its evidence window. The oracle resolves it within seconds, or you can click **Request AI resolution**.
+2. Read the verdict, the evidence assessment and the reasoning. Then click **Verify this resolution**.
+3. Walk market **#3** through the full flow yourself by switching accounts.
+
+The UI's badges always state when the oracle isn't in a TEE or the model isn't attested, so a local run can't be mistaken for production. To exercise the dstack TEE code path locally, use `npx phala simulator start`.
+
+## Deploying (live demo)
+
+The live demo runs in three places: the **UI on Vercel**, the **oracle in a Phala Cloud TDX enclave**, and the **contract on Base Sepolia**. Runbooks are in [BUILD_GUIDE.md §2–§4](BUILD_GUIDE.md#2-deploy-the-contract-to-base-sepolia). In summary:
+
+1. Deploy the contract: put `DEPLOYER_KEY` (a fresh test-only wallet) in `.env`, then run `npm run testnet:deploy`.
 2. Get the **reviewed production pins** from Confidential AI: the MRTD, RTMR1/RTMR2, the RTMR3 seed, and the allowlist digest. Fill in the `REPLACE_WITH_…` values in [`deploy/phala/docker-compose.yml`](deploy/phala/docker-compose.yml). The container refuses to start while any placeholder remains, or if TEErminator doesn't report `Verified`.
 3. Build and push the image (CI does this on `main`), then pin its digest in the compose file.
 4. Deploy: `phala deploy -n ai-settlement-oracle -c deploy/phala/docker-compose.yml -e deploy/phala/.env --wait`
-5. Verify `GET /attestation` and `GET /inference-attestation`, fund the signer, and call `registerEnclaveSigner(signer, composeHash, quoteHash)`.
+5. Verify `GET /attestation` and `GET /inference-attestation`.
+6. Run `ORACLE_URL=https://<cvm> npm run testnet:seed`. This registers the enclave signer, funds the demo participants and seeds the markets.
+7. Deploy `demo/` on Vercel, setting `VITE_RPC_URL`, `VITE_ORACLE_URL`, `VITE_CONTRACT_ADDRESS`, `VITE_CHAIN_NAME`, `VITE_EXPLORER_URL` and `VITE_DEPLOY_BLOCK`.
+
+The public oracle limits how much your inference key can be used: `MAX_AI_CALLS_PER_DAY` (default 50) and `RESOLVE_RATE_LIMIT_PER_HOUR` per IP (default 10). The key itself is a Phala encrypted secret that only the enclave can decrypt.
 
 ## Configuration (oracle)
 
@@ -220,6 +287,8 @@ The full runbook is in [BUILD_GUIDE.md §3](BUILD_GUIDE.md#3-deploy-the-oracle-i
 | `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | none / `claude-opus-5-5` | Optional, not-attested Claude mode |
 | `RPC_URL`, `CONTRACT_ADDRESS` | local anvil / `deployments/local.json` | Chain settings |
 | `AUTO_SUBMIT`, `WATCH_INTERVAL_MS`, `DATA_DIR` | `true`, `15000`, none | Submission, polling interval, persistence |
+| `MAX_AI_CALLS_PER_DAY` / `RESOLVE_RATE_LIMIT_PER_HOUR` | `50` / `10` | Spend cap on the operator's inference key, and the per-IP limit on manual triggers |
+| `ALLOWED_ORIGINS` | `*` | CORS allowlist, e.g. your Vercel URL |
 | `ALLOW_PRIVATE_EVIDENCE_HOSTS` | `false` | Allow localhost/private-IP evidence URLs (disables the SSRF guard) |
 
 ## Oracle API
@@ -250,7 +319,7 @@ The full runbook is in [BUILD_GUIDE.md §3](BUILD_GUIDE.md#3-deploy-the-oracle-i
 ## Tests
 
 ```bash
-npm test     # forge test (15) + oracle vitest (16)
+npm test     # forge test (15) + oracle vitest (18)
 ```
 
 ## Roadmap
@@ -277,7 +346,7 @@ oracle/                    TypeScript oracle service (runs in the TDX CVM)
   Dockerfile, docker-entrypoint.sh   Image with pinned TEErminator; refuses to start unverified
 demo/                      React + viem UI
 deploy/phala/              docker-compose for Phala Cloud (dstack), incl. TEErminator pins
-scripts/                   Local demo: deploy, seed, time-warp, ABI export
+scripts/                   deploy / seed (local or Base Sepolia), time-warp, ABI export
 NOTES.md                   Original design notes and research
 ```
 

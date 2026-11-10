@@ -82,15 +82,29 @@ TEE_MODE=dstack DSTACK_SIMULATOR_ENDPOINT=<path> npm run dev:oracle
 npm run demo:seed                         # re-register: the signer is now derived by dstack
 ```
 
-## 2. Deploy the contract to a testnet
+## 2. Deploy the contract to Base Sepolia
 
-```bash
-cd contracts
-export RPC_URL=https://sepolia.base.org DEPLOYER_KEY=0x...
-forge script script/Deploy.s.sol --rpc-url $RPC_URL --private-key $DEPLOYER_KEY --broadcast
-```
+1. Create a **fresh, test-only wallet**. Fund it with roughly 0.02 Base Sepolia ETH from any public faucet.
+2. Fill in the root `.env`:
 
-Override the defaults with env vars: `PROPOSAL_BOND_WEI`, `MIN_EVIDENCE_STAKE_WEI`, `LIVENESS_SECONDS`, `EVIDENCE_WINDOW_SECONDS`, `DELAY_PERIOD_SECONDS`, `MAX_DELAYS`. Transfer ownership to a multisig before real use.
+   ```bash
+   cp .env.example .env
+   #   RPC_URL=https://sepolia.base.org
+   #   DEPLOYER_KEY=0x…        # the test-only wallet
+   ```
+
+3. Deploy:
+
+   ```bash
+   npm run build:contracts
+   npm run testnet:deploy
+   ```
+
+This writes `deployments/base-sepolia.json` with the address, deploy block and parameters. Commit that file, because the README and the Vercel settings point at it.
+
+The testnet profile uses cheap amounts (0.0005 ETH bond, 0.0001 ETH minimum stake), a 15-minute liveness window, a 5-minute evidence window and a 10-minute delay period. Edit `scripts/lib.ts` to change them. Transfer ownership to a multisig before any real use.
+
+Alternative: `forge script script/Deploy.s.sol` takes the same parameters from env vars.
 
 ## 3. Deploy the oracle into a TEE (Phala Cloud)
 
@@ -145,18 +159,48 @@ curl https://<cvm-endpoint>/inference-attestation | jq '{attested, reason, pinne
 
 The signer key is derived from the app's KMS root at path `ai-settlement-oracle/resolution-signer/v1`. It is stable across restarts of the same app, and changes if you deploy a new app or change the path. Re-register after any code change, because the new compose hash produces a new quote.
 
-### 3.5 Point the UI at it
+### 3.5 Seed the demo markets
+
+Once the oracle is up, run:
 
 ```bash
-VITE_RPC_URL=$RPC_URL VITE_ORACLE_URL=https://<cvm-endpoint> VITE_CONTRACT_ADDRESS=$CONTRACT npm run build -w demo
+ORACLE_URL=https://<cvm-endpoint> npm run testnet:seed
 ```
 
-On non-local chains, the UI uses an injected wallet such as MetaMask instead of anvil accounts.
+This does three things:
 
-## 4. Operating notes
+1. Registers the enclave signer from `GET /attestation`, skipping this if it's already registered with the same quote.
+2. Funds the oracle signer and eight demo participant wallets from the deployer. The participant wallets are derived from `DEPLOYER_KEY`.
+3. Seeds the markets:
+   - **#1 NASA 2025** and **#2 JWST/K2-18b**, both escalated with staked evidence;
+   - **#3**, left open for the interactive path.
+
+The watcher resolves #1 and #2 about 5 minutes later. The script registers whatever signer the oracle reports and warns if the oracle isn't running in a real TDX enclave, so always check `GET /attestation` first.
+
+## 4. Host the UI on Vercel
+
+1. In Vercel, choose **Add New → Project**, import `alecwaj/AI-Settlement-Oracle`, and set **Root Directory** to `demo`. `demo/vercel.json` handles the install and build.
+2. Under **Environment Variables**, set:
+
+   | Variable | Value |
+   |---|---|
+   | `VITE_RPC_URL` | `https://sepolia.base.org` |
+   | `VITE_ORACLE_URL` | `https://<cvm-endpoint>` (must be HTTPS; the Phala gateway URL is) |
+   | `VITE_CONTRACT_ADDRESS` | from `deployments/base-sepolia.json` |
+   | `VITE_DEPLOY_BLOCK` | `deployBlock` from the same file |
+   | `VITE_CHAIN_NAME` | `Base Sepolia` |
+   | `VITE_EXPLORER_URL` | `https://sepolia.basescan.org` |
+
+3. Deploy. Then set `ALLOWED_ORIGINS` in the Phala compose file to your Vercel URL and redeploy the CVM. This step is optional; the default is `*`.
+4. Put the Vercel URL in the README's **Live demo** line. `https://<app>.vercel.app/?market=1` deep-links straight to the NASA market.
+
+Reviewers get read-only mode with no wallet. Verdicts are also read from contract events, so they stay visible even if the oracle is briefly offline.
+
+## 5. Operating notes
 
 - **Upgrades:** a new image means a new compose hash and a new quote. Register the new signer, then revoke the old one.
 - **Failures:** a round is recorded as failed and nothing is signed in any of these cases: the inference enclave isn't `Verified`, the model isn't pinned, or the output is truncated, filtered or off-schema. The watcher retries after 5 minutes, or you can call `POST /markets/:id/resolve`.
+- **Spend caps:** `MAX_AI_CALLS_PER_DAY` (default 50) caps all model calls from the watcher and from manual triggers, and `RESOLVE_RATE_LIMIT_PER_HOUR` limits manual triggers per IP. `GET /health` shows `aiCallsRemainingToday`.
 - **Costs:** one inference call per AI round, about 20–40k input tokens with three evidence pages. DeepSeek V4.1 Flash on Confidential AI is $0.30 per 1M input tokens and $1.20 per 1M output tokens (as of 2026-11-09).
 - **Confidential AI releases:** when they rotate the allowlist or measurements, TEErminator stops verifying and the oracle stops signing (fail closed). Re-review the new values, update the compose file, redeploy, and re-register the signer.
 - **Evidence hashes:** `contentHash` is keccak256 of the normalized extracted text, not of raw HTML, because pages embed per-request nonces. Submitters can commit `0x0` to skip the check. The transcript records the raw-bytes hash too.
