@@ -1,0 +1,67 @@
+{
+ "schema": "c8s.allowlist/v1",
+ "workloads": {
+  "inference-worker-0": {
+   "containers": [
+    {
+     "args": {
+      "argv": [
+       "--path=/mnt/c8s-data/models/dsv411017a",
+       "--timeout-seconds=900",
+       "--poll-seconds=1",
+       "--expected-repository=deepseek-ai/DeepSeek-V4.1-Flash-1017",
+       "--expected-revision=1bae0e1088993b9b82de08f59de5be5a34e42170",
+       "--revision-metadata=.model-lock-local-manifest.json",
+       "--expected-file=.model-lock-local-manifest.json=eb73a3749d5c99994b018a6063068c2ca28871900415fc364fbbfe1b07300629",
+       "--expected-file=config.json=8be45ce0476004a3f529fd896115a4a2e800a129ad2d3ec05b16050f52e21879",
+       "--expected-file=model.safetensors.index.json=74b0686a3d2891980d5e303251b075a3bccae2c2ff650747db2620a649b98fa8",
+       "--expected-file=tokenizer_config.json=6ac8c8dc065ed118161d02dd532749ae3f52c243deac27872134fae2f50d8547",
+       "--gpu-metrics-port=29000",
+       "--private-server-output",
+       "--",
+       "python3",
+       "-m",
+       "sglang.launch_server",
+       "--model-path=/mnt/c8s-data/models/dsv411017a",
+       "--served-model-name=deepseek-ai/DeepSeek-V4.1-Flash-1017",
+       "--revision=1bae0e1088993b9b82de08f59de5be5a34e42170",
+       "--tool-call-parser=deepseekv41",
+       "--reasoning-parser=deepseek-v41",
+       "--tp=4",
+       "--moe-runner-backend=auto",
+       "--attention-backend=dsv4",
+       "--context-length=131072",
+       "--sampling-backend=pytorch",
+       "--max-running-requests=16",
+       "--flashinfer-allreduce-fusion-backend=trtllm",
+       "--mem-fraction-static=0.90",
+       "--chunked-prefill-size=4096",
+       "--swa-full-tokens-ratio=0.1",
+       "--enable-metrics",
+       "--enable-cache-report",
+       "--host=0.0.0.0",
+       "--port=30000"
+      ]
+     },
+     "command": {
+      "policy": "exact",
+      "argv": [
+       "/usr/local/bin/wait-for-model"
+      ]
+     }
+    }
+   ]
+  },
+  "nginx": {
+   "containers": [
+    {
+     "args": {
+      "argv": [
+       "--foo"
+      ]
+     }
+    }
+   ]
+  }
+ }
+}

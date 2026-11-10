@@ -1,302 +1,252 @@
-import { useState, useEffect } from 'react'
-import './index.css'
-import type { ResolutionResult, Attestation } from './types'
+import { useCallback, useEffect, useState } from 'react';
+import { isAddress, type Address } from 'viem';
+import {
+  abi,
+  DEV_ACCOUNTS,
+  DEV_LABELS,
+  oracle,
+  publicClient,
+  short,
+  signerAddress,
+  STATUS,
+  warp,
+  walletFor,
+  type Attestation,
+  type Signer,
+} from './lib';
+import { MarketView, type Market } from './MarketView';
 
-const ORACLE_API = 'http://localhost:3001'
+export default function App() {
+  const [contract, setContract] = useState<Address | null>((import.meta.env.VITE_CONTRACT_ADDRESS as Address) ?? null);
+  const [att, setAtt] = useState<Attestation | null>(null);
+  const [chainId, setChainId] = useState<number | null>(null);
+  const [chainTime, setChainTime] = useState<bigint>(0n);
+  const [signer, setSigner] = useState<Signer>({ kind: 'dev', index: 2 });
+  const [markets, setMarkets] = useState<Array<{ id: bigint; m: Market }>>([]);
+  const [selected, setSelected] = useState<bigint | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+  const refresh = useCallback(() => setTick((t) => t + 1), []);
 
-// The single demo market — NASA astrobiology long-tail prediction
-const DEMO_MARKET = {
-  id: 'demo-nasa-astrobiology-2025',
-  question: 'Will NASA find definitive evidence of extraterrestrial life in 2025?',
-  criteria: 'Resolves YES if NASA officially announces discovery of living organisms, fossilized life, or unambiguous biosignatures from beyond Earth. Resolves NO if only precursor molecules (amino acids, organic compounds) are found, as these indicate potential for life but are not life itself.',
-  resolutionTime: Date.now(),
-}
-
-function App() {
-  const [status, setStatus] = useState<'idle' | 'processing' | 'complete'>('idle')
-  const [progress, setProgress] = useState(0)
-  const [phase, setPhase] = useState(0)
-  const [result, setResult] = useState<ResolutionResult | null>(null)
-  const [attestation, setAttestation] = useState<Attestation | null>(null)
-  const [showVerification, setShowVerification] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  // Processing phases for visual effect
-  const phases = [
-    'Querying news sources...',
-    'Analyzing evidence quality...',
-    'Evaluating semantic criteria...',
-    'Computing confidence score...',
-    'Generating cryptographic attestation...',
-  ]
-
-  const startResolution = async () => {
-    setStatus('processing')
-    setProgress(0)
-    setPhase(0)
-    setResult(null)
-    setAttestation(null)
-    setShowVerification(false)
-    setError(null)
-
-    // Start the actual resolution in background
-    const resolvePromise = fetch(`${ORACLE_API}/markets/${DEMO_MARKET.id}/resolve`, {
-      method: 'POST',
-    }).then(r => r.json())
-
-    // Animate through phases over 20 seconds
-    const totalTime = 20000 // 20 seconds
-    const interval = 100
-    const steps = totalTime / interval
-    let currentStep = 0
-
-    const timer = setInterval(() => {
-      currentStep++
-      const newProgress = (currentStep / steps) * 100
-      setProgress(newProgress)
-      setPhase(Math.min(Math.floor((newProgress / 100) * phases.length), phases.length - 1))
-
-      if (currentStep >= steps) {
-        clearInterval(timer)
-      }
-    }, interval)
-
-    // Wait for both animation and API
-    const data = await resolvePromise
-
-    // Ensure we show at least 20 seconds of animation
-    const remainingTime = Math.max(0, totalTime - (currentStep * interval))
-    await new Promise(r => setTimeout(r, remainingTime))
-
-    clearInterval(timer)
-
-    if (data.success) {
-      setResult(data.result)
-      setStatus('complete')
-
-      // Auto-fetch attestation
-      const attestRes = await fetch(`${ORACLE_API}/markets/${DEMO_MARKET.id}/attest`, {
-        method: 'POST',
-      })
-      const attestData = await attestRes.json()
-      if (attestData.success) {
-        setAttestation(attestData.attestation)
-      }
-    } else {
-      setError(data.error || 'Resolution failed')
-      setStatus('idle')
+  // Oracle identity + contract discovery
+  useEffect(() => {
+    oracle<Attestation>('/attestation').then(setAtt).catch(() => setError('Oracle not reachable — start it with `npm run dev:oracle`.'));
+    if (!contract) {
+      oracle<{ contract: Address | null }>('/health')
+        .then((h) => h.contract && isAddress(h.contract) && setContract(h.contract))
+        .catch(() => undefined);
     }
-  }
+  }, [contract]);
+
+  // Chain state
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const [id, block] = await Promise.all([publicClient.getChainId(), publicClient.getBlock()]);
+        if (cancelled) return;
+        setChainId(id);
+        setChainTime(block.timestamp);
+        if (id !== 31337) setSigner((s) => (s.kind === 'dev' ? { kind: 'injected', address: '0x0000000000000000000000000000000000000000' } : s));
+        if (!contract) return;
+        const count = await publicClient.readContract({ address: contract, abi, functionName: 'marketCount' });
+        const list = await Promise.all(
+          Array.from({ length: Number(count) }, (_, i) => BigInt(i + 1)).map(async (id) => ({
+            id,
+            m: await publicClient.readContract({ address: contract, abi, functionName: 'getMarket', args: [id] }),
+          })),
+        );
+        if (!cancelled) {
+          setMarkets(list.reverse());
+          setError(null);
+        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message.split('\n')[0] : String(e));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [contract, tick]);
+
+  // Light polling so watcher-driven resolutions appear without a manual refresh
+  useEffect(() => {
+    const t = setInterval(refresh, 5000);
+    return () => clearInterval(t);
+  }, [refresh]);
+
+  const connectInjected = async () => {
+    const eth = (window as unknown as { ethereum?: { request: (a: { method: string }) => Promise<string[]> } }).ethereum;
+    if (!eth) return setError('No injected wallet (e.g. MetaMask) found.');
+    const [address] = await eth.request({ method: 'eth_requestAccounts' });
+    setSigner({ kind: 'injected', address: address as Address });
+  };
+
+  const selectedMarket = markets.find((x) => x.id === selected);
 
   return (
-    <div className="container">
-      {/* Header */}
-      <header className="header">
-        <h1>Verifiable AI Oracle</h1>
-        <p className="subtitle">Cryptographically provable prediction market resolution</p>
+    <div className="app">
+      <header className="top">
+        <div>
+          <h1>AI Settlement Oracle</h1>
+          <p className="muted">Optimistic resolution · double-challenge escalation · TEE-attested open-weight AI arbiter</p>
+        </div>
+        <TeeBadge att={att} />
       </header>
 
-      {/* Error */}
-      {error && <div className="error-banner">{error}</div>}
-
-      {/* Market Card */}
-      <div className="market-card">
-        <div className="market-header">
-          <span className="market-tag">Long-tail Prediction Market</span>
-          <span className={`status-indicator ${status}`}>
-            {status === 'idle' && 'Pending Resolution'}
-            {status === 'processing' && 'Processing...'}
-            {status === 'complete' && 'Resolved'}
-          </span>
-        </div>
-
-        <h2 className="market-question">{DEMO_MARKET.question}</h2>
-
-        <div className="criteria-box">
-          <label>Resolution Criteria</label>
-          <p>{DEMO_MARKET.criteria}</p>
-        </div>
-
-        {/* Action Area */}
-        {status === 'idle' && (
-          <button className="resolve-button" onClick={startResolution}>
-            <span className="button-icon">🔮</span>
-            Resolve with Verifiable AI
-          </button>
-        )}
-
-        {/* Processing Animation */}
-        {status === 'processing' && (
-          <div className="processing-container">
-            {/* Visual Network */}
-            <div className="network-visualization">
-              <svg viewBox="0 0 400 200" className="network-svg">
-                {/* Grid lines */}
-                <defs>
-                  <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                    <stop offset="0%" stopColor="#667eea" stopOpacity="0.2" />
-                    <stop offset="50%" stopColor="#667eea" stopOpacity="1" />
-                    <stop offset="100%" stopColor="#764ba2" stopOpacity="0.2" />
-                  </linearGradient>
-                </defs>
-
-                {/* Animated nodes */}
-                <g className="nodes">
-                  {/* News sources */}
-                  <circle cx="50" cy="50" r="8" className={`node ${progress > 10 ? 'active' : ''}`} />
-                  <circle cx="50" cy="100" r="8" className={`node ${progress > 15 ? 'active' : ''}`} />
-                  <circle cx="50" cy="150" r="8" className={`node ${progress > 20 ? 'active' : ''}`} />
-
-                  {/* Analysis nodes */}
-                  <circle cx="150" cy="75" r="10" className={`node ${progress > 35 ? 'active' : ''}`} />
-                  <circle cx="150" cy="125" r="10" className={`node ${progress > 45 ? 'active' : ''}`} />
-
-                  {/* Verification nodes */}
-                  <circle cx="250" cy="100" r="12" className={`node ${progress > 60 ? 'active' : ''}`} />
-
-                  {/* Final oracle */}
-                  <circle cx="350" cy="100" r="15" className={`node oracle ${progress > 85 ? 'active' : ''}`} />
-                </g>
-
-                {/* Connection lines with animation */}
-                <g className="connections">
-                  <line x1="58" y1="50" x2="142" y2="75" className={`connection ${progress > 25 ? 'pulse' : ''}`} />
-                  <line x1="58" y1="100" x2="142" y2="75" className={`connection ${progress > 30 ? 'pulse' : ''}`} />
-                  <line x1="58" y1="150" x2="142" y2="125" className={`connection ${progress > 35 ? 'pulse' : ''}`} />
-                  <line x1="158" y1="75" x2="242" y2="100" className={`connection ${progress > 50 ? 'pulse' : ''}`} />
-                  <line x1="158" y1="125" x2="242" y2="100" className={`connection ${progress > 55 ? 'pulse' : ''}`} />
-                  <line x1="258" y1="100" x2="335" y2="100" className={`connection ${progress > 75 ? 'pulse' : ''}`} />
-                </g>
-
-                {/* Data packets */}
-                {progress > 20 && progress < 90 && (
-                  <>
-                    <circle cx={50 + (progress - 20) * 2.5} cy={100} r="4" className="packet" />
-                    <circle cx={150 + (progress - 40) * 2.5} cy={100} r="4" className="packet" />
-                  </>
-                )}
-              </svg>
-            </div>
-
-            {/* Phase text */}
-            <div className="phase-text">
-              <span className="phase-label">{phases[phase]}</span>
-            </div>
-
-            {/* Progress bar */}
-            <div className="progress-container">
-              <div className="progress-bar" style={{ width: `${progress}%` }} />
-            </div>
-
-            {/* Verification badges */}
-            <div className="verification-badges">
-              <span className={`badge ${progress > 30 ? 'verified' : ''}`}>
-                {progress > 30 ? '✓' : '○'} Sources Verified
-              </span>
-              <span className={`badge ${progress > 60 ? 'verified' : ''}`}>
-                {progress > 60 ? '✓' : '○'} Evidence Hashed
-              </span>
-              <span className={`badge ${progress > 85 ? 'verified' : ''}`}>
-                {progress > 85 ? '✓' : '○'} Attestation Signed
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* Result */}
-        {status === 'complete' && result && (
-          <div className="result-container">
-            <div className="outcome-box">
-              <div className="outcome-label">Oracle Determination</div>
-              <div className={`outcome-value ${result.outcome.toLowerCase()}`}>
-                {result.outcome}
-              </div>
-              <div className="confidence">Confidence: {(result.confidence * 100).toFixed(1)}%</div>
-            </div>
-
-            <div className="reasoning-box">
-              <label>AI Reasoning</label>
-              <p>{result.reasoning}</p>
-            </div>
-
-            <button
-              className="verify-button"
-              onClick={() => setShowVerification(!showVerification)}
+      <section className="bar">
+        <div>
+          <span className="label">Acting as</span>
+          {chainId === 31337 ? (
+            <select
+              value={signer.kind === 'dev' ? signer.index : 'injected'}
+              onChange={(e) => (e.target.value === 'injected' ? connectInjected() : setSigner({ kind: 'dev', index: Number(e.target.value) }))}
             >
-              {showVerification ? 'Hide' : 'View'} Cryptographic Verification
+              {DEV_ACCOUNTS.map((a, i) => (
+                <option key={a.address} value={i}>
+                  {DEV_LABELS[i]} · {short(a.address, 4)}
+                </option>
+              ))}
+              <option value="injected">Browser wallet…</option>
+            </select>
+          ) : (
+            <button onClick={connectInjected}>{signer.kind === 'injected' && signer.address !== '0x0000000000000000000000000000000000000000' ? short(signer.address, 4) : 'Connect wallet'}</button>
+          )}
+        </div>
+        <div className="muted small">
+          {chainId !== null && <>chain {chainId} · </>}
+          {chainTime > 0n && <>chain time {new Date(Number(chainTime) * 1000).toLocaleString()} · </>}
+          {contract ? <>contract {short(contract, 4)}</> : 'no contract'}
+        </div>
+        {chainId === 31337 && (
+          <div className="row">
+            <button className="ghost" onClick={() => warp(130).then(refresh)} title="Skip the liveness window">
+              ⏩ +2 min
             </button>
-
-            {showVerification && attestation && (
-              <div className="verification-panel">
-                <div className="verification-header">
-                  <span className="lock-icon">🔐</span>
-                  <span>EIP-712 Attestation</span>
-                </div>
-
-                <div className="verification-grid">
-                  <div className="verification-item">
-                    <label>Signer Address</label>
-                    <code>{attestation.signer}</code>
-                  </div>
-
-                  <div className="verification-item">
-                    <label>Signature</label>
-                    <code className="signature">{attestation.signature.slice(0, 66)}...</code>
-                  </div>
-
-                  <div className="verification-item">
-                    <label>Outcome Hash</label>
-                    <code>{result.outcomeHash}</code>
-                  </div>
-
-                  <div className="verification-item">
-                    <label>Timestamp</label>
-                    <code>{new Date(result.timestamp).toISOString()}</code>
-                  </div>
-                </div>
-
-                <div className="sanctity-box">
-                  <h4>Information Sanctity</h4>
-                  <ul>
-                    <li>
-                      <strong>Cryptographic Binding:</strong> The attestation cryptographically binds the market ID, outcome, and reasoning to a specific timestamp and signer.
-                    </li>
-                    <li>
-                      <strong>Non-Repudiation:</strong> The EIP-712 signature proves the oracle operator made this specific determination at this specific time.
-                    </li>
-                    <li>
-                      <strong>Verifiable Execution:</strong> Anyone can verify this attestation on-chain using the smart contract's verifyAttestation() function.
-                    </li>
-                    <li>
-                      <strong>Evidence Integrity:</strong> While this demo uses simulated evidence, production deployments hash and timestamp all source material.
-                    </li>
-                  </ul>
-                </div>
-
-                <div className="evidence-preview">
-                  <h4>Evidence Sources (Simulated)</h4>
-                  {result.evidence.map((source, i) => (
-                    <div key={i} className="evidence-item">
-                      <span className="evidence-dot">•</span>
-                      <span>{source}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
+            <button className="ghost" onClick={() => warp(310).then(refresh)} title="Close the evidence window">
+              ⏩ +5 min
+            </button>
           </div>
         )}
-      </div>
+      </section>
 
-      {/* Footer */}
-      <footer className="footer">
-        <p>
-          This demo shows verifiable AI oracle resolution for prediction markets.
-          Built with Solidity, TypeScript, and EIP-712 attestations.
-        </p>
+      {error && <div className="error">{error}</div>}
+
+      {selectedMarket && contract ? (
+        <MarketView
+          contract={contract}
+          id={selectedMarket.id}
+          market={selectedMarket.m}
+          signer={signer}
+          chainTime={chainTime}
+          att={att}
+          onBack={() => setSelected(null)}
+          onChange={refresh}
+          onError={setError}
+        />
+      ) : (
+        <>
+          <section className="card">
+            <h2>Markets</h2>
+            {markets.length === 0 && <p className="muted">No markets yet. Run <code>npm run demo:seed</code> or create one below.</p>}
+            {markets.map(({ id, m }) => (
+              <button key={id.toString()} className="market-row" onClick={() => setSelected(id)}>
+                <span className={`pill s${m.status}`}>{STATUS[m.status]}</span>
+                <span className="q">
+                  #{id.toString()} {m.question}
+                </span>
+                {m.disputeCount > 0 && <span className="muted small">{m.disputeCount}× disputed</span>}
+              </button>
+            ))}
+          </section>
+          {contract && <CreateMarket contract={contract} signer={signer} onCreated={refresh} onError={setError} />}
+        </>
+      )}
+
+      <footer className="muted small">
+        Signer {att ? short(att.signer, 4) : '…'} · model {att?.llm.model ?? '…'} · acting address {short(signerAddress(signer), 4)}
       </footer>
     </div>
-  )
+  );
 }
 
-export default App
+function TeeBadge({ att }: { att: Attestation | null }) {
+  if (!att) return <span className="badge off">Oracle offline</span>;
+  const oracle =
+    att.mode === 'tdx' ? (
+      <span className="badge ok" title={`app ${att.appId}`}>🔐 Oracle: Intel TDX</span>
+    ) : att.mode === 'tdx-simulator' ? (
+      <span className="badge warn">🧪 Oracle: dstack simulator</span>
+    ) : (
+      <span className="badge bad">⚠️ Oracle: dev mode, no TEE</span>
+    );
+  const inference =
+    att.llm.provider === 'confidential' ? (
+      <span className={`badge ${att.llm.requireAttestedInference ? 'ok' : 'warn'}`} title={att.llm.gateway ?? ''}>
+        {att.llm.requireAttestedInference ? '🔐' : '🧪'} Inference: Confidential AI enclave
+      </span>
+    ) : (
+      <span className="badge bad">⚠️ Inference: {att.llm.provider}, not attested</span>
+    );
+  return (
+    <div className="row">
+      {oracle}
+      {inference}
+    </div>
+  );
+}
+
+function CreateMarket({ contract, signer, onCreated, onError }: { contract: Address; signer: Signer; onCreated: () => void; onError: (e: string) => void }) {
+  const [question, setQuestion] = useState('');
+  const [criteria, setCriteria] = useState('');
+  const [minutes, setMinutes] = useState(0);
+  const [threshold, setThreshold] = useState(70);
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    setBusy(true);
+    try {
+      const wallet = await walletFor(signer);
+      const now = (await publicClient.getBlock()).timestamp;
+      const hash = await wallet.writeContract({
+        address: contract,
+        abi,
+        functionName: 'createMarket',
+        args: [question, criteria, now + BigInt(minutes * 60), threshold * 100],
+        account: wallet.account!,
+        chain: wallet.chain,
+      });
+      await publicClient.waitForTransactionReceipt({ hash });
+      setQuestion('');
+      setCriteria('');
+      onCreated();
+    } catch (e) {
+      onError(e instanceof Error ? e.message.split('\n')[0] : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <section className="card">
+      <h2>Create market</h2>
+      <label>Question</label>
+      <input value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Will … happen by …?" />
+      <label>Resolution criteria (the AI applies these literally)</label>
+      <textarea rows={3} value={criteria} onChange={(e) => setCriteria(e.target.value)} placeholder="Resolves YES if … Resolves NO if …" />
+      <div className="row">
+        <div>
+          <label>Resolves in (minutes)</label>
+          <input type="number" min={0} value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} />
+        </div>
+        <div>
+          <label>AI confidence threshold (%)</label>
+          <input type="number" min={1} max={100} value={threshold} onChange={(e) => setThreshold(Number(e.target.value))} />
+        </div>
+      </div>
+      <button disabled={busy || !question || !criteria} onClick={submit}>
+        {busy ? 'Creating…' : 'Create market'}
+      </button>
+    </section>
+  );
+}
