@@ -3,15 +3,20 @@
 #   phala login
 #   phala deploy -n ai-settlement-oracle -c deploy/phala/docker-compose.yml -e deploy/phala/.env --wait
 #
-# Everything in this file is measured: its hash becomes the app's compose_hash (extended into RTMR3 and
-# reported by GET /attestation). Values passed with `-e` are encrypted client-side to the CVM's KMS key,
-# so ANTHROPIC_API_KEY is never visible to Phala, the host, or the node operator.
+# Two enclaves, one chain of evidence:
+#   1. This CVM (Intel TDX via dstack) runs the oracle + TEErminator. Everything in this file is measured:
+#      its hash is the app's compose_hash (RTMR3), reported by GET /attestation.
+#   2. Inference runs in Confidential AI's TDX + NVIDIA confidential-GPU enclaves. TEErminator, inside
+#      this CVM, attests that upstream before forwarding any prompt, using the pins in
+#      TEERMINATOR_REMOTE_ARGS below. Because those pins live in this measured file, a verifier of (1)
+#      learns exactly which inference policy the oracle enforces.
 #
+# Secrets passed with `-e` (CONFIDENTIAL_API_KEY, RPC_URL) are encrypted client-side to the CVM's KMS key.
 # Replace the image tag with the immutable digest you pushed (…/ai-settlement-oracle@sha256:…) before a
-# production deploy; a mutable tag weakens what the attestation proves.
+# production deploy.
 services:
   oracle:
-    image: ghcr.io/alecwaj/ai-settlement-oracle:1.0.0
+    image: ghcr.io/alecwaj/ai-settlement-oracle:1.1.0
     restart: unless-stopped
     ports:
       - "3001:3001"
@@ -20,10 +25,26 @@ services:
       - oracle-data:/data
     environment:
       TEE_MODE: dstack
-      LLM_MODE: anthropic
-      ANTHROPIC_MODEL: claude-opus-5-5
-      ANTHROPIC_EFFORT: high
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      LLM_MODE: confidential
+      CONFIDENTIAL_MODEL: deepseek-ai/DeepSeek-V4.1-Flash-1017
+      REQUIRE_ATTESTED_INFERENCE: "true"
+      CONFIDENTIAL_UPSTREAM: https://api.confidential.ai/
+      CONFIDENTIAL_PUBLIC_BASE: https://api.confidential.ai
+      # Production pins for Confidential AI's front door (TEErminator `remote add` flags). Measurements are
+      # mandatory: get the reviewed values for the current release from Confidential AI
+      # (hello@confidential.ai) — TDX launch digest (MRTD, 96 hex), RTMR[1]/RTMR[2] (kernel + rootfs),
+      # and the RTMR[3] seed. The container refuses to start while any REPLACE_WITH_ placeholder remains.
+      # The allowlist digest was observed on 2026-11-09: that policy pins the inference workers to
+      # deepseek-ai/DeepSeek-V4.1-Flash-1017 @ revision 1bae0e1088993b9b82de08f59de5be5a34e42170 and the
+      # weight-index hash. It changes when Confidential AI ships a new release; re-review and update.
+      TEERMINATOR_REMOTE_ARGS: >-
+        --mode attest-lb --server-name api.confidential.ai
+        --measurements REPLACE_WITH_MRTD
+        --rtmr 1=REPLACE_WITH_RTMR1,2=REPLACE_WITH_RTMR2
+        --expected-rtmr3 REPLACE_WITH_RTMR3
+        --pin-policy sha256:251eaf57d70dda5b2f6e292bf898cb339993a81a99381d195d45f580708da113
+        --tdx-tcb-status UpToDate
+      CONFIDENTIAL_API_KEY: ${CONFIDENTIAL_API_KEY}
       RPC_URL: ${RPC_URL}
       CONTRACT_ADDRESS: ${CONTRACT_ADDRESS}
       AUTO_SUBMIT: "true"

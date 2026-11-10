@@ -6,7 +6,8 @@ Runbook for the AI Settlement Oracle MVP. See the [README](README.md) for the co
 
 - Node.js 20+ and npm
 - [Foundry](https://book.getfoundry.sh/getting-started/installation) (`forge`, `anvil`, `cast`)
-- An Anthropic API key ([console.anthropic.com](https://console.anthropic.com))
+- A Confidential AI API key: email hello@confidential.ai or use [request access](https://confidential.ai/request-access). An Anthropic key works for the non-attested dev mode.
+- [TEErminator](https://github.com/confidential-dot-ai/TEErminator/releases) if you want attested inference locally. The Docker image bundles it.
 - For TEE deployment: Docker, a container registry (GHCR works), and a [Phala Cloud](https://cloud.phala.com) account with the `phala` CLI (`npm i -g phala`)
 
 ```bash
@@ -34,8 +35,11 @@ If you cloned without submodules: `git submodule update --init --recursive`.
 ```bash
 TEE_MODE=dev                          # no TEE locally; the UI shows a red "Dev mode" badge
 ORACLE_DEV_PRIVATE_KEY=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d   # anvil #1
-LLM_MODE=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
+LLM_MODE=confidential
+CONFIDENTIAL_API_KEY=...
+CONFIDENTIAL_MODEL=deepseek-ai/DeepSeek-V4.1-Flash-1017
+CONFIDENTIAL_BASE_URL=https://api.confidential.ai/v1   # unattested smoke test; see below for TEErminator
+REQUIRE_ATTESTED_INFERENCE=false
 ```
 
 Time controls: the UI's **⏩ +2 min / +5 min** buttons, or `npm run demo:warp -- <seconds>`.
@@ -47,6 +51,28 @@ Walkthrough script (≈3 minutes):
 3. Click **⏩ +5 min**. The oracle log prints `Market 1 ready for AI resolution`, and the UI shows the round with outcome, confidence, reasoning and per-evidence assessment.
 4. Open **Attestation**, then **🔍 Verify this resolution** to show the digest, signature, registration, quote and transcript checks.
 5. Switch *Acting as* to the winning submitters and **Claim**.
+
+### Attested inference locally (TEErminator)
+
+Run the same verifying proxy the production image uses:
+
+```bash
+# macOS arm64 example; checksums are in the release's checksums.txt
+gh release download v0.0.4 -R confidential-dot-ai/TEErminator -p 'teerminator_0.0.4_darwin_arm64.tar.gz'
+tar -xzf teerminator_0.0.4_darwin_arm64.tar.gz teerminator
+
+./teerminator remote add 127.0.0.1:8080 https://api.confidential.ai/ \
+  --mode attest-lb --server-name api.confidential.ai \
+  --measurements <MRTD> --rtmr 1=<RTMR1>,2=<RTMR2> --expected-rtmr3 <RTMR3> \
+  --pin-policy sha256:<allowlist sha256> --tdx-tcb-status UpToDate
+printf '%s' "$CONFIDENTIAL_API_KEY" | ./teerminator remote auth 127.0.0.1:8080 -
+./teerminator start &
+./teerminator status          # must show Verified for 127.0.0.1:8080
+```
+
+Then set `CONFIDENTIAL_BASE_URL=http://127.0.0.1:8080/v1`, `TEERMINATOR_BIN=$PWD/teerminator` and `REQUIRE_ATTESTED_INFERENCE=true` in `oracle/.env`. Use `curl localhost:3001/inference-attestation` to see the verdict, the allowlist sha256, and the pinned model revision.
+
+The pin values (`<MRTD>` and the others) come from Confidential AI's reviewed release instructions. Their public docs don't list them.
 
 ### Optional: run the dstack code path with the simulator
 
@@ -80,10 +106,21 @@ docker buildx imagetools inspect ghcr.io/<owner>/ai-settlement-oracle:1.0.0   # 
 
 Edit `deploy/phala/docker-compose.yml` to reference `image: ghcr.io/<owner>/ai-settlement-oracle@sha256:<digest>`. The compose file is what the TEE measures, so a digest (rather than a mutable tag) is what makes the attestation meaningful.
 
-### 3.2 Deploy the CVM
+### 3.2 Fill in the inference-enclave pins
+
+Fill in the `REPLACE_WITH_…` values in `TEERMINATOR_REMOTE_ARGS` in `deploy/phala/docker-compose.yml` with the reviewed values for Confidential AI's current release: MRTD, RTMR1/RTMR2 and the RTMR3 seed. Also confirm the `--pin-policy` allowlist digest:
 
 ```bash
-cp deploy/phala/.env.example deploy/phala/.env    # ANTHROPIC_API_KEY, RPC_URL, CONTRACT_ADDRESS
+curl -s https://api.confidential.ai/allowlist -o allowlist.json && shasum -a 256 allowlist.json
+jq -r '.workloads[] | .containers[]?.args.argv[]? | select(test("expected-(repository|revision)|served-model-name"))' allowlist.json | sort -u
+```
+
+The second command shows which model repository and revision that policy pins. The pins sit in the measured compose file, so anyone verifying the oracle's quote can see exactly which inference enclave policy it enforces. If the pins are missing, or TEErminator doesn't return `Verified`, the container exits before the oracle starts.
+
+### 3.3 Deploy the CVM
+
+```bash
+cp deploy/phala/.env.example deploy/phala/.env    # CONFIDENTIAL_API_KEY, RPC_URL, CONTRACT_ADDRESS
 phala login
 phala deploy -n ai-settlement-oracle -c deploy/phala/docker-compose.yml -e deploy/phala/.env --wait
 phala link
@@ -92,10 +129,11 @@ phala logs        # expect: "🔐 TEE identity ready (Intel TDX) — signer 0x�
 
 Values passed with `-e` are encrypted locally to the CVM's KMS public key. Phala, the host and the node operator never see the Anthropic key.
 
-### 3.3 Verify, fund and register the signer
+### 3.4 Verify, fund and register the signer
 
 ```bash
 curl https://<cvm-endpoint>/attestation | jq '{mode, signer, composeHash, quoteHash: .bootQuote.quoteHash}'
+curl https://<cvm-endpoint>/inference-attestation | jq '{attested, reason, pinnedRevision, allowlist: .publicEvidence.allowlistSha256}'
 ```
 
 1. Paste `bootQuote.quote` into [proof.t16z.com](https://proof.t16z.com) and confirm it is a valid TDX quote.
@@ -107,7 +145,7 @@ curl https://<cvm-endpoint>/attestation | jq '{mode, signer, composeHash, quoteH
 
 The signer key is derived from the app's KMS root at path `ai-settlement-oracle/resolution-signer/v1`. It is stable across restarts of the same app, and changes if you deploy a new app or change the path. Re-register after any code change, because the new compose hash produces a new quote.
 
-### 3.4 Point the UI at it
+### 3.5 Point the UI at it
 
 ```bash
 VITE_RPC_URL=$RPC_URL VITE_ORACLE_URL=https://<cvm-endpoint> VITE_CONTRACT_ADDRESS=$CONTRACT npm run build -w demo
@@ -118,6 +156,7 @@ On non-local chains, the UI uses an injected wallet such as MetaMask instead of 
 ## 4. Operating notes
 
 - **Upgrades:** a new image means a new compose hash and a new quote. Register the new signer, then revoke the old one.
-- **Failures:** if Claude refuses, truncates output or fails schema validation, the round is recorded as failed and nothing is signed. The watcher retries after 5 minutes, or you can call `POST /markets/:id/resolve`.
-- **Costs:** one Claude call per AI round (Opus 5.5, adaptive thinking at `high` effort, about 20–40k input tokens with three evidence pages).
+- **Failures:** a round is recorded as failed and nothing is signed in any of these cases: the inference enclave isn't `Verified`, the model isn't pinned, or the output is truncated, filtered or off-schema. The watcher retries after 5 minutes, or you can call `POST /markets/:id/resolve`.
+- **Costs:** one inference call per AI round, about 20–40k input tokens with three evidence pages. DeepSeek V4.1 Flash on Confidential AI is $0.30 per 1M input tokens and $1.20 per 1M output tokens (as of 2026-11-09).
+- **Confidential AI releases:** when they rotate the allowlist or measurements, TEErminator stops verifying and the oracle stops signing (fail closed). Re-review the new values, update the compose file, redeploy, and re-register the signer.
 - **Evidence hashes:** `contentHash` is keccak256 of the normalized extracted text, not of raw HTML, because pages embed per-request nonces. Submitters can commit `0x0` to skip the check. The transcript records the raw-bytes hash too.

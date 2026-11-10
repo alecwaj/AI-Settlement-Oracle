@@ -1,8 +1,9 @@
 /**
- * The AI arbiter: asks Claude to weigh the market criteria, the staked participants' verdicts and the
+ * The AI arbiter: asks the model (by default an open-weight model inside Confidential AI's enclaves) to weigh the market criteria, the staked participants' verdicts and the
  * evidence fetched inside the TEE, and to return a structured, calibrated decision.
  */
 import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import { betaZodOutputFormat } from '@anthropic-ai/sdk/helpers/beta/zod';
 import { z } from 'zod';
 import type { FetchedEvidence } from './evidence.js';
@@ -40,7 +41,7 @@ export interface ResolverInput {
 
 export interface ResolverOutput {
   decision: Decision;
-  provider: 'anthropic' | 'mock';
+  provider: 'confidential' | 'anthropic' | 'mock';
   model: string;
   responseId: string | null;
   stopReason: string | null;
@@ -141,6 +142,80 @@ export class AnthropicResolver implements Resolver {
       usage: response.usage,
       rawText,
       request: { system: SYSTEM_PROMPT, user, model: this.model, effort: this.effort },
+    };
+  }
+}
+
+/** JSON Schema for the decision, trimmed to what strict structured-output backends accept. */
+export function decisionJsonSchema(): Record<string, unknown> {
+  const schema = z.toJSONSchema(DecisionSchema, { target: 'draft-7' }) as Record<string, unknown>;
+  const strip = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(strip);
+    if (node && typeof node === 'object') {
+      return Object.fromEntries(
+        Object.entries(node as Record<string, unknown>)
+          .filter(([k]) => k !== '$schema' && k !== 'minimum' && k !== 'maximum')
+          .map(([k, v]) => [k, strip(v)]),
+      );
+    }
+    return node;
+  };
+  return strip(schema) as Record<string, unknown>;
+}
+
+/**
+ * Open-weight model served inside Confidential AI's TDX + confidential-GPU enclaves, reached through the
+ * TEErminator verifying proxy (OpenAI-compatible API). This is the verifiable-inference path.
+ */
+export class ConfidentialResolver implements Resolver {
+  private readonly client: OpenAI;
+
+  constructor(
+    private readonly model: string,
+    baseURL: string,
+    apiKey: string | undefined,
+    client?: OpenAI,
+  ) {
+    this.client = client ?? new OpenAI({ baseURL, apiKey: apiKey ?? 'missing', timeout: 300_000, maxRetries: 2 });
+  }
+
+  async resolve(input: ResolverInput): Promise<ResolverOutput> {
+    const user = buildUserPrompt(input);
+    const completion = await this.client.chat.completions.create({
+      model: this.model,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: user },
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'settlement_decision', strict: true, schema: decisionJsonSchema() },
+      },
+    });
+
+    const choice = completion.choices[0];
+    if (!choice) throw new Error('Inference returned no choices');
+    if (choice.finish_reason === 'length') throw new Error('Model output truncated (length)');
+    if (choice.finish_reason === 'content_filter') throw new Error('Model output blocked by content filter');
+    const rawText = choice.message.content ?? '';
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      throw new Error('Model response was not valid JSON');
+    }
+    const result = DecisionSchema.safeParse(parsed);
+    if (!result.success) throw new Error(`Model response did not match the decision schema: ${result.error.message.slice(0, 200)}`);
+
+    return {
+      decision: { ...result.data, confidence: Math.min(1, Math.max(0, result.data.confidence)) },
+      provider: 'confidential',
+      model: completion.model || this.model,
+      responseId: completion.id ?? null,
+      stopReason: choice.finish_reason ?? null,
+      usage: completion.usage ?? null,
+      rawText,
+      request: { system: SYSTEM_PROMPT, user, model: this.model, effort: 'n/a' },
     };
   }
 }

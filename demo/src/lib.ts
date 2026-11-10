@@ -75,7 +75,7 @@ export interface Attestation {
   composeHash: Hex | null;
   tcb: Record<string, string> | null;
   verification: string[];
-  llm: { provider: string; model: string; effort: string };
+  llm: { provider: string; model: string; gateway: string | null; requireAttestedInference: boolean };
 }
 
 export interface ResolutionRecord {
@@ -102,7 +102,26 @@ export interface ResolutionRecord {
   signature: Hex;
   signer: Address;
   teeMode: string;
+  inference: InferenceAttestation;
   quote: { quote: Hex; reportData: Hex; quoteHash: Hex } | null;
   txHash: Hex | null;
   evidence: Array<{ uri: string; ok: boolean; status: number | null; error: string | null; hashCheck: string; submissionIndex: number; verdict: string }>;
+}
+
+export interface InferenceAttestation {
+  provider: 'confidential' | 'anthropic' | 'mock';
+  attested: boolean;
+  model: string;
+  gateway: { checked: boolean; local: string; remote: string | null; mode: string | null; verdict: string; details: string | null; error: string | null } | null;
+  publicEvidence: {
+    fetchedAt: string;
+    publicBase: string;
+    allowlistSha256: string | null;
+    discoverySha256: string | null;
+    modelPins: Array<{ workload: string; servedModelName: string | null; repository: string | null; revision: string | null; expectedFiles: Record<string, string> }>;
+    error: string | null;
+  } | null;
+  modelPinned: boolean;
+  pinnedRevision: string | null;
+  reason: string;
 }

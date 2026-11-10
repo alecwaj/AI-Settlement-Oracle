@@ -87,10 +87,10 @@ describe('config', () => {
   it('refuses a mocked model inside a real TEE', () => {
     expect(() => loadConfig({ TEE_MODE: 'dstack', LLM_MODE: 'mock', DEPLOYMENT_FILE: '/nonexistent' })).toThrow(/not allowed/);
   });
-  it('defaults to dstack + anthropic + claude-opus-5-5', () => {
+  it('defaults to dstack + Confidential AI + DeepSeek V4.1 Flash', () => {
     const c = loadConfig({ DEPLOYMENT_FILE: '/nonexistent' });
     expect(c.teeMode).toBe('dstack');
-    expect(c.llmMode).toBe('anthropic');
-    expect(c.model).toBe('claude-opus-5-5');
+    expect(c.llmMode).toBe('confidential');
+    expect(c.model).toBe('deepseek-ai/DeepSeek-V4.1-Flash-1017');
   });
 });

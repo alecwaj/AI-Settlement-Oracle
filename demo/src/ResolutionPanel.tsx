@@ -41,7 +41,22 @@ export function ResolutionPanel({ contract, record: r, att }: { contract: Addres
         out.push({ label: 'Resolution quote report_data = digest', ok: r.quote.reportData.toLowerCase().startsWith(r.digest.toLowerCase()), detail: short(r.quote.quoteHash, 8) });
       }
 
-      // 5. Transcript bytes hash to the signed transcriptHash
+      // 5. Inference ran in an attested enclave on pinned open weights
+      const inf = r.inference;
+      out.push({
+        label: inf.provider === 'confidential' ? 'Inference enclave verified (TEErminator)' : 'Inference enclave attested',
+        ok: inf.attested,
+        detail: inf.attested ? `gateway ${inf.gateway?.verdict}` : inf.reason,
+      });
+      if (inf.provider === 'confidential') {
+        out.push({
+          label: 'Model weights pinned in attested policy',
+          ok: inf.modelPinned,
+          detail: inf.pinnedRevision ? `${inf.model} @ ${inf.pinnedRevision.slice(0, 10)}…` : 'not found in allowlist',
+        });
+      }
+
+      // 6. Transcript bytes hash to the signed transcriptHash
       const res = await fetch(`${ORACLE_URL}/transcripts/${r.transcriptHash}`);
       if (res.ok) {
         const text = await res.text();
@@ -105,8 +120,21 @@ export function ResolutionPanel({ contract, record: r, att }: { contract: Addres
           <dd>
             {r.model} ({r.provider})
           </dd>
-          <dt>TEE</dt>
+          <dt>Oracle TEE</dt>
           <dd>{r.teeMode}</dd>
+          <dt>Inference</dt>
+          <dd>
+            {r.inference.attested ? '🔐 attested' : '⚠️ not attested'} · {r.inference.reason}
+          </dd>
+          {r.inference.publicEvidence?.allowlistSha256 && (
+            <>
+              <dt>Policy</dt>
+              <dd className="mono">
+                allowlist sha256 {short(r.inference.publicEvidence.allowlistSha256, 10)}
+                {r.inference.gateway?.details && <> · {r.inference.gateway.details}</>}
+              </dd>
+            </>
+          )}
           <dt>Signer</dt>
           <dd className="mono">{r.signer}</dd>
           <dt>Digest</dt>

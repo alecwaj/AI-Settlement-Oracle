@@ -26,6 +26,7 @@ import type { OracleConfig } from './config.js';
 import { fetchEvidence, type FetchedEvidence } from './evidence.js';
 import { verdictLabel, type Decision, type Resolver } from './resolver.js';
 import type { Quote, TeeIdentity } from './tee.js';
+import type { InferenceAttestation } from './inference-attestation.js';
 
 export const Status = { Open: 0, Proposed: 1, Escalated: 2, Resolved: 3, PausedForManual: 4 } as const;
 export const OutcomeCode = { None: 0, YES: 1, NO: 2, INVALID: 3 } as const;
@@ -62,6 +63,7 @@ export interface ResolutionRecord {
   signature: Hex;
   signer: Address;
   teeMode: string;
+  inference: InferenceAttestation;
   quote: Quote | null;
   txHash: Hex | null;
   evidence: Array<Omit<FetchedEvidence, 'text'> & { submissionIndex: number; verdict: 'YES' | 'NO' }>;
@@ -107,6 +109,7 @@ export class SettlementOracleService {
     private readonly cfg: OracleConfig,
     readonly tee: TeeIdentity,
     private readonly resolver: Resolver,
+    private readonly attestInference: () => Promise<InferenceAttestation>,
   ) {
     this.publicClient = createPublicClient({ transport: http(cfg.rpcUrl) });
     this.load();
@@ -175,6 +178,12 @@ export class SettlementOracleService {
       submissions.map((s) => fetchEvidence(s.evidenceURI, s.contentHash, { allowPrivateHosts: this.cfg.allowPrivateEvidenceHosts })),
     );
 
+    // Verify the inference enclave *before* any prompt leaves this enclave; fail closed if required.
+    const inference = await this.attestInference();
+    if (this.cfg.requireAttestedInference && !inference.attested) {
+      throw new Error(`Inference enclave not verified — refusing to resolve: ${inference.reason}`);
+    }
+
     const round = market.aiRound;
     const result = await this.resolver.resolve({
       question: market.question,
@@ -214,6 +223,7 @@ export class SettlementOracleService {
         rawText: result.rawText,
       },
       decision: result.decision,
+      inference,
       tee: { mode: this.tee.info.mode, signer: this.tee.info.signer, appId: this.tee.info.appId, composeHash: this.tee.info.composeHash },
     });
     const transcriptHash = keccak256(toBytes(transcript));
@@ -263,6 +273,7 @@ export class SettlementOracleService {
       signature,
       signer: this.tee.account.address,
       teeMode: this.tee.info.mode,
+      inference: { ...inference, gateway: inference.gateway ? { ...inference.gateway, raw: null } : null },
       quote,
       txHash: null,
       evidence: evidence.map(({ text: _text, ...e }, i) => ({ ...e, submissionIndex: i, verdict: verdictLabel(submissions[i].verdict) })),

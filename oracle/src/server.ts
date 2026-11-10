@@ -3,15 +3,32 @@ import cors from 'cors';
 import { isHex, type Hex } from 'viem';
 import { loadConfig } from './config.js';
 import { TeeIdentity } from './tee.js';
-import { AnthropicResolver, MockResolver } from './resolver.js';
+import { AnthropicResolver, ConfidentialResolver, MockResolver, type Resolver } from './resolver.js';
+import { attestInference } from './inference-attestation.js';
 import { SettlementOracleService, canonicalJson } from './oracle.js';
 import { fetchEvidence } from './evidence.js';
 
 const cfg = loadConfig();
 const tee = await TeeIdentity.init(cfg);
-const resolver = cfg.llmMode === 'mock' ? new MockResolver() : new AnthropicResolver(cfg.model, cfg.effort);
+const resolver: Resolver =
+  cfg.llmMode === 'confidential'
+    ? new ConfidentialResolver(cfg.model, cfg.confidentialBaseUrl, cfg.confidentialApiKey)
+    : cfg.llmMode === 'anthropic'
+      ? new AnthropicResolver(cfg.anthropicModel, cfg.effort)
+      : new MockResolver();
 if (cfg.llmMode === 'mock') console.warn('⚠️  LLM_MODE=mock — decisions are NOT made by a real model.');
-const service = new SettlementOracleService(cfg, tee, resolver);
+if (cfg.llmMode === 'anthropic') console.warn('⚠️  LLM_MODE=anthropic — inference is NOT hardware-attested.');
+if (cfg.llmMode === 'confidential' && !cfg.teerminatorBin) {
+  console.warn('⚠️  TEERMINATOR_BIN not set — Confidential AI calls are not attestation-gated by this process.');
+}
+const inferenceOpts = {
+  provider: cfg.llmMode,
+  model: cfg.model,
+  baseUrl: cfg.llmMode === 'confidential' ? cfg.confidentialBaseUrl : null,
+  publicBase: cfg.confidentialPublicBase,
+  teerminatorBin: cfg.teerminatorBin,
+} as const;
+const service = new SettlementOracleService(cfg, tee, resolver, () => attestInference(inferenceOpts));
 
 const app = express();
 app.use(cors());
@@ -37,7 +54,8 @@ app.get('/health', (_req, res) => {
     signer: tee.info.signer,
     teeMode: tee.info.mode,
     inTee: tee.info.inTee,
-    llm: cfg.llmMode === 'mock' ? 'mock' : cfg.model,
+    llm: { provider: cfg.llmMode, model: cfg.model },
+    requireAttestedInference: cfg.requireAttestedInference,
     contract: cfg.contractAddress ?? null,
     autoSubmit: cfg.autoSubmit,
   });
@@ -45,7 +63,15 @@ app.get('/health', (_req, res) => {
 
 /** Everything a third party needs to verify that the signer key lives in this enclave. */
 app.get('/attestation', (_req, res) => {
-  send(res, { ...tee.info, llm: { provider: cfg.llmMode, model: cfg.model, effort: cfg.effort } });
+  send(res, {
+    ...tee.info,
+    llm: { provider: cfg.llmMode, model: cfg.model, gateway: inferenceOpts.baseUrl, requireAttestedInference: cfg.requireAttestedInference },
+  });
+});
+
+/** Live check of the inference enclave: TEErminator verdict + attested allowlist model pins. */
+app.get('/inference-attestation', async (_req, res) => {
+  send(res, await attestInference(inferenceOpts));
 });
 
 app.get('/markets/:id/resolutions', (req, res) => {
@@ -82,7 +108,8 @@ app.post('/evidence/hash', async (req, res) => {
 
 app.listen(cfg.port, () => {
   console.log(`🔮 AI Settlement Oracle listening on :${cfg.port}`);
-  console.log(`   signer ${tee.info.signer} | TEE ${tee.info.mode} | LLM ${cfg.llmMode === 'mock' ? 'mock' : cfg.model}`);
+  console.log(`   signer ${tee.info.signer} | TEE ${tee.info.mode} | LLM ${cfg.llmMode}:${cfg.model}`);
+  console.log(`   attested inference ${cfg.requireAttestedInference ? 'REQUIRED' : 'not required'}${inferenceOpts.baseUrl ? ` via ${inferenceOpts.baseUrl}` : ''}`);
   console.log(`   contract ${cfg.contractAddress ?? '(not configured — set CONTRACT_ADDRESS)'}`);
   service.startWatcher();
 });

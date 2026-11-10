@@ -1,50 +1,71 @@
 # AI Settlement Oracle
 
-**Prediction-market resolution where an AI running inside a TEE settles the disputes that humans can't.**
+**Prediction-market resolution in which an open-weight AI model settles the disputes humans can't. It runs inside hardware enclaves, so every verdict can be traced to the exact code and the exact model weights that produced it.**
 
-This repo is a working MVP of the design in ORA's [*AI Settlement Oracle: Resolving to Truth*](https://paragraph.com/@orablog/ai-settlement-oracle). It keeps the optimistic-oracle flow that already works for ordinary markets. When a market is disputed twice, the final decision moves from a token-holder vote to a verifiable AI arbiter. Here that arbiter is Claude (`claude-opus-5-5`), called from an Intel TDX confidential VM (via [dstack](https://github.com/Dstack-TEE/dstack) / Phala Cloud). Every verdict is signed by a key that never leaves the enclave, and the TDX quote ties that key to the exact code that is running.
+This repo is a working MVP of the design in ORA's [*AI Settlement Oracle: Resolving to Truth*](https://paragraph.com/@orablog/ai-settlement-oracle).
+
+- **What stays the same:** the optimistic-oracle flow that already works for ordinary markets.
+- **What changes:** when a market is disputed twice, the final decision moves from a token-holder vote to a verifiable AI arbiter.
+- **How it's verified:** the article proposes opML and zkML. This MVP uses trusted execution environments (TEEs) instead, because they're the most practical route to verifiable AI today.
 
 | Component | Status |
 |---|---|
-| Solidity contract: optimistic proposals, single/double challenge, evidence staking, AI resolution, delay/manual fallback, reward/slash payouts | ✅ 15 Foundry tests |
-| Oracle service: evidence fetching, Claude arbiter (structured output), EIP-712 signing, TDX quotes, on-chain submission, watcher | ✅ Unit tests + end-to-end run on anvil |
+| Solidity contract: optimistic proposals, single/double challenge, evidence staking, AI resolution, delay with manual fallback, reward/slash payouts | ✅ 15 Foundry tests |
+| Oracle service: evidence fetching, AI arbiter (structured output), EIP-712 signing, TDX quotes, inference-enclave attestation, on-chain submission, watcher | ✅ 16 unit tests, plus an end-to-end run on anvil |
+| Verifiable inference: [Confidential AI](https://confidential.ai/docs) enclaves serving **`deepseek-ai/DeepSeek-V4.1-Flash-1017`**, gated by TEErminator | ✅ Integrated and fail-closed (see [Deploying](#deploying-into-the-tees) for the pins you need) |
 | Demo UI: full market lifecycle, evidence submission, AI rounds, in-browser verification of every resolution | ✅ |
-| TEE deployment (Phala Cloud compose + Dockerfile + CI image build) | ✅ Ready to deploy (see [Deploying into a TEE](#deploying-into-a-tee)) |
-| On-chain verification of the TDX quote itself | 🔜 Roadmap (quote hash is anchored on-chain; the quote is verified off-chain today) |
+| TEE deployment: Phala Cloud compose, Dockerfile with pinned TEErminator, CI image build | ✅ Ready to deploy |
+| On-chain verification of TDX quotes | 🔜 Roadmap (quote hashes are anchored on-chain; quotes are verified off-chain today) |
 
 ---
 
 ## The problem
 
-Most prediction markets (Polymarket via UMA, for example) resolve through an **optimistic oracle**. Someone proposes an outcome with a bond. If nobody disputes it within a liveness window (about 2 hours on UMA), it's final. Disputed markets escalate to a vote by UMA token holders (the DVM, UMA's Data Verification Mechanism).
+Most prediction markets resolve through an **optimistic oracle**. Polymarket uses UMA, for example. Someone proposes an outcome and posts a bond. If nobody disputes it within the liveness window (about 2 hours on UMA), the outcome is final. Disputed markets go to a vote of UMA token holders.
 
-The ORA article identifies two weaknesses in that final step:
+The ORA article identifies two weaknesses in that last step:
 
-1. **Economic attack surface.** The cost of corrupting the outcome is bounded by the cost of acquiring a voting majority of the token. On high-volume markets, the money that can be won by flipping the result can exceed what it costs to buy those votes.
-2. **Herd decision-making.** Voters are rewarded for agreeing with the majority, not for being right. That invites conformity and lets subjective reinterpretations of the resolution criteria win. The article cites contested real-world markets such as the 2024 Venezuelan election.
+1. **Economic attack surface.** Corrupting the outcome costs only as much as a voting majority of the token. On high-volume markets, the profit from flipping a result can exceed that cost.
+2. **Herd decision-making.** Voters are paid for agreeing with the majority, not for being right. That rewards conformity and lets subjective reinterpretations of the resolution criteria win.
 
-Long-tail markets make this worse. Questions like *"Will NASA find definitive evidence of extraterrestrial life in 2025?"* need someone to read the evidence against carefully worded criteria. Is a "potential biosignature" definitive? Are amino acids "life"? A price feed can't answer that. A token vote may not answer it honestly.
+Long-tail markets make this worse. Take *"Will NASA find definitive evidence of extraterrestrial life in 2025?"* Is a "potential biosignature" definitive? Are amino acids "life"? Someone has to read the evidence against carefully worded criteria. A price feed can't do that, and a token vote may not do it honestly.
 
 ## The design → this MVP
 
-The ORA design keeps the optimistic oracle for "business as usual" and changes only the **double-challenge** path. Here's how each component maps:
+The ORA design keeps the optimistic oracle for business-as-usual markets and changes only the **double-challenge** path.
 
 | ORA concept | Implementation here |
 |---|---|
-| OO submission system (propose + bond, liveness) | `propose()` / `settle()` in [`SettlementOracle.sol`](contracts/src/SettlementOracle.sol) |
-| Single challenge: dispute resets the request | First `dispute()` returns the market to `Open`; bonds stay escrowed on their sides |
-| Double challenge: escalate | Second `dispute()` moves the market to `Escalated` and opens an evidence window |
-| Token holders collect verifiable evidence and submit evidence plus a verdict, with stake | `submitEvidence(verdict, uri, contentHash)` with an ETH stake; a rolling `submissionsHash` commits to the exact set |
-| Query the AI oracle with all submissions | Oracle watcher detects closed windows, fetches every evidence URL **inside the TEE**, and sends criteria, verdicts and evidence to Claude |
-| AI Settlement Oracle issues the final verdict | Claude returns `{outcome, confidence, reasoning, evidence_assessments, …}` via structured outputs; the enclave key signs it (EIP-712) and the contract verifies the signer |
-| Verdicts matching the AI are rewarded, opposing ones slashed | `claim()`: winners split the losing pool pro rata; `INVALID` refunds everyone |
-| "Verifiable AI" (opML/zkML in the article) | **TEE attestation**: TDX quote ties the signer key to the measured compose and image; per-resolution quote ties each digest to the enclave; full transcript hash is signed |
-| Accountability concerns ("an AI can't be held accountable") | Confidence threshold: low-confidence verdicts **delay** instead of settling; after 3 delays the market pauses for an accountable human (`manualResolve`) |
+| OO submission system (propose with a bond, liveness window) | `propose()` and `settle()` in [`SettlementOracle.sol`](contracts/src/SettlementOracle.sol) |
+| Single challenge: a dispute resets the request | The first `dispute()` returns the market to `Open`. Bonds stay escrowed on their sides. |
+| Double challenge: escalate | The second `dispute()` sets the market to `Escalated` and opens an evidence window. |
+| Token holders gather verifiable evidence and submit evidence plus a verdict, with stake | `submitEvidence(verdict, uri, contentHash)` with an ETH stake. A rolling `submissionsHash` commits to the exact set of submissions. |
+| The protocol queries the AI oracle with all submissions | The oracle's watcher detects closed evidence windows. It fetches every evidence URL **inside the oracle enclave** and sends the criteria, verdicts and evidence to the model. |
+| A verifiable AI decides | An open-weight model running in **Confidential AI's TDX and confidential-GPU enclaves** returns `{outcome, confidence, reasoning, evidence_assessments, …}`. The oracle enclave signs the result (EIP-712), and the contract checks the signer. |
+| Verdicts matching the AI are rewarded; opposing ones are slashed | `claim()`: winners split the losing pool pro rata. An `INVALID` outcome refunds everyone. |
+| Verifiability via opML / zkML | **Two TEEs instead.** The oracle runs in an Intel TDX CVM (dstack / Phala). Its TDX quote binds the signing key to the measured code. Inference runs in Confidential AI's enclaves. TEErminator attests that upstream before any prompt is sent, and its attested policy pins the model repository, revision and weights-index hash. |
+| Accountability ("an AI can't be held accountable") | Below the confidence threshold, a verdict **delays** the market instead of settling it. After 3 delays the market pauses for an accountable human (`manualResolve`). |
 
-Two design choices go beyond the article. Both come from the project's working [NOTES](NOTES.md):
+Two design choices go beyond the article, both from the project's [NOTES](NOTES.md):
 
-- **Calibrated confidence with delay.** Each market sets a threshold (default 70%). Below it, the contract records a `ResolutionDelayed` event, reopens the evidence window, and the AI tries again with more evidence. It never forces a coin flip.
-- **Evidence is untrusted input.** The model is told to weigh evidence by quality, not by headcount or stake (the herd problem), and to ignore instructions embedded in submitted documents (prompt injection).
+- **Calibrated confidence with delay.** Each market has a threshold, 70% by default. Below it, the contract emits `ResolutionDelayed`, reopens the evidence window, and the AI tries again with more evidence.
+- **Evidence is untrusted input.** The model is told to weigh evidence by its quality, not by how many participants or how much stake back it. That counters the herd problem. It's also told to ignore instructions embedded in submitted documents, which guards against prompt injection.
+
+## Which model, and why it's verifiable
+
+**Default: `deepseek-ai/DeepSeek-V4.1-Flash-1017`, served by Confidential AI.**
+
+| Requirement | How this model meets it |
+|---|---|
+| Inference inside a hardware enclave | Confidential AI serves it on Intel TDX confidential VMs with NVIDIA confidential-computing GPUs (c8s). GPUs must pass CC and NVIDIA attestation during measured boot before the node can join. |
+| Verifiable *weights*, not just verifiable code | Confidential AI's public attested policy (`GET https://api.confidential.ai/allowlist`) pins the inference workers to `--expected-repository=deepseek-ai/DeepSeek-V4.1-Flash-1017`, `--expected-revision=1bae0e1088993b9b82de08f59de5be5a34e42170`, and the sha256 of `model.safetensors.index.json`. TEErminator pins that allowlist by its sha256, so a `Verified` session proves these exact open weights served the request. |
+| Reproducible by anyone | Open weights at a fixed Hugging Face revision mean any third party can re-run the same transcript on the same model. |
+| Structured, auditable output | Strict JSON-schema output (`response_format: json_schema, strict: true`), validated with Zod before anything is signed. |
+| Available today | It's currently the only model Confidential AI serves; checked against `/v1/models` on 2026-11-09. Kimi K3, GLM 5.3 and Qwen3.8 27B are listed as "request capacity". |
+
+Set `CONFIDENTIAL_MODEL` to switch models. The oracle refuses to sign if the requested model isn't pinned in the attested allowlist.
+
+**Claude** (`LLM_MODE=anthropic`, `claude-opus-5-5`) is still supported for development and comparison. Its inference runs on Anthropic's infrastructure and isn't hardware-attested, so in a real TEE deployment the oracle rejects it unless `REQUIRE_ATTESTED_INFERENCE=false` is set. That setting would be visible in the measured compose file.
 
 ## Architecture
 
@@ -54,22 +75,26 @@ flowchart LR
     C[SettlementOracle.sol]
   end
 
-  subgraph CVM["Intel TDX confidential VM (dstack / Phala Cloud)"]
+  subgraph CVM["Oracle enclave: Intel TDX CVM (dstack / Phala Cloud)"]
     W[Watcher] --> F[Evidence fetcher]
-    F --> R[Claude arbiter<br/>claude-opus-5-5]
+    F --> R[Arbiter client]
+    R --> TE[TEErminator<br/>verifying proxy]
     R --> T[Transcript + keccak256]
     T --> S[EIP-712 signer<br/>key derived in-enclave]
     S --> Q[TDX quote<br/>report_data = digest]
-    G[(dstack guest agent<br/>/var/run/dstack.sock)] -. key + quotes .-> S
-    G -. quotes .-> Q
+    G[(dstack guest agent)] -. key + quotes .-> S
+  end
+
+  subgraph CAI["Inference enclave: Confidential AI (TDX + confidential GPUs)"]
+    M[DeepSeek-V4.1-Flash-1017<br/>revision pinned in attested allowlist]
   end
 
   U[Market participants] -->|propose / dispute / submitEvidence| C
-  C -->|Escalated + window closed| W
+  C -->|Escalated, window closed| W
   F -->|HTTPS| E[(Evidence URLs)]
-  R -->|HTTPS, TLS terminated in enclave| A[(api.anthropic.com)]
+  TE -->|attest-lb: TDX quote, measurements,<br/>route, allowlist sha256, then forward| M
   S -->|resolveWithAttestation| C
-  V[Anyone / demo UI] -->|GET /attestation, /transcripts| CVM
+  V[Anyone / demo UI] -->|/attestation, /inference-attestation, /transcripts| CVM
   V -->|verify signer, digest, quote hash| C
 ```
 
@@ -84,7 +109,7 @@ flowchart LR
                                   ▼
                               Escalated ── submitEvidence (stake + verdict + URL) ──┐
                                   │                                                │
-                         window closes, oracle runs in TEE  ◀──────────────────────┘
+              window closes: oracle verifies inference enclave, then asks the model ◀┘
                                   │
              confidence ≥ threshold│                    confidence < threshold
                     ┌─────────────┴──────────────┐
@@ -97,41 +122,46 @@ flowchart LR
 
 ## Trust model
 
-The TEE changes **who you have to trust**. It doesn't make the AI infallible.
-
-| Layer | Without a TEE (operator-run oracle) | With this MVP |
+| Layer | Operator-run oracle (no TEE) | This MVP |
 |---|---|---|
-| Signing key | Operator holds it and can sign anything | Derived inside the TDX VM by the dstack KMS; host and operator cannot read it |
-| Oracle code | Whatever the operator happens to run | Measured: compose hash and image digest are in RTMR3 and reported in the quote |
-| Evidence fetch | Operator could swap or cache content | Fetched inside the enclave; time, raw-bytes hash and text hash are in the signed transcript |
-| Prompt and model response | Operator could edit the reasoning | Exact request and response are hashed into `transcriptHash`, which is signed with the verdict |
-| API key | Operator-visible | Passed as a Phala **encrypted secret**, decrypted only inside the CVM |
-| Submissions the AI saw | Unverifiable | `submissionsHash` must equal the contract's rolling hash or the transaction reverts |
+| Signing key | The operator holds it and can sign anything. | Derived inside the TDX CVM by the dstack KMS. The host and operator can't read it. |
+| Oracle code | Whatever the operator runs. | Measured. The compose hash and image digest are in RTMR3 and reported in the quote. |
+| Inference enclave policy | Unknown. | The TEErminator pins (measurements, RTMR3, allowlist sha256) sit in the measured compose file, so verifying the oracle tells you which inference policy it enforces. |
+| Model and weights | Whatever the API returned. | The attested allowlist pins the repository, revision and weights-index hash. The oracle refuses to sign unless TEErminator returns `Verified` and the model is pinned. |
+| Evidence fetch | The operator could swap or cache content. | Fetched inside the oracle enclave. The fetch time, raw-bytes hash and text hash go into the signed transcript. |
+| Prompt and response | The operator could edit the reasoning. | The exact request and response are hashed into `transcriptHash`, which is signed together with the verdict. |
+| API keys | Visible to the operator. | Phala **encrypted secrets**, decrypted only inside the CVM. |
+| Which submissions the AI saw | Unverifiable. | `submissionsHash` must equal the contract's rolling hash, or the transaction reverts. |
 
-What you still trust:
+What remains trusted:
 
-- **Intel TDX hardware and the dstack/Phala KMS**, the hardware root of trust.
-- **Anthropic's API.** Inference runs on Anthropic's infrastructure, not inside this enclave. The attestation proves *this code sent this prompt to `api.anthropic.com` over TLS terminated inside the enclave and received this response*. It does not prove which weights produced the response. The ORA article's opML/zkML approach (or an open-weight model in a GPU TEE) closes that gap, at the cost of model quality. See the roadmap.
-- **Evidence sources.** The oracle proves what it read, not that the source told the truth.
-- **The contract owner**, who registers enclave signers and handles `PausedForManual` markets. In production this should be a multisig or timelock that only registers signers whose quote verifies against a published compose hash.
-- **Semantic correctness.** The model can still be wrong. The confidence threshold, the delay mechanism and full transcripts are the mitigations.
+- **Hardware vendors:** Intel TDX, NVIDIA confidential computing, and the dstack/Phala and Confidential AI attestation stacks.
+- **Pin reviewers.** Someone has to review the pins that TEErminator enforces against Confidential AI's published release.
+- **Evidence sources.** The oracle proves what it read, not that the source was right.
+- **The contract owner**, who registers enclave signers and resolves `PausedForManual` markets. In production this should be a multisig or timelock that registers only signers whose quote matches a published compose hash.
+- **Semantic correctness.** The model can still be wrong. Mitigations are the confidence threshold, the delay mechanism, full transcripts, and reproducibility on open weights.
+
+Compared with the article's opML/zkML: a TEE gives hardware-rooted integrity today at near-native speed, on a frontier-class open model. opML (fraud proofs) and zkML (validity proofs) remove the hardware trust assumption, but don't yet scale to models of this size. They remain the long-term target (see [Roadmap](#roadmap)).
 
 ### How a third party verifies a resolution
 
-The demo UI's **🔍 Verify this resolution** button runs steps 1–5 in your browser:
+The demo UI's **🔍 Verify this resolution** button runs steps 1–6 in your browser:
 
-1. **Digest:** recompute the EIP-712 digest from the public fields (`resolutionDigest()` on the contract) and compare it to the oracle's.
-2. **Signature:** `ecrecover(digest, signature)` must equal the oracle's signer.
-3. **Registration:** `enclaveSigners(signer)` must be active, and its `quoteHash` must equal `keccak256(bootQuote)` from `GET /attestation`.
+1. **Digest:** recompute the EIP-712 digest from the public fields using `resolutionDigest()` on the contract.
+2. **Signature:** `ecrecover(digest, signature)` must equal the oracle's enclave signer.
+3. **Registration:** `enclaveSigners(signer)` must be active, with `quoteHash == keccak256(bootQuote)` from `GET /attestation`.
 4. **Per-resolution quote:** its `report_data` must start with the digest.
-5. **Transcript:** `keccak256(GET /transcripts/:hash)` must equal the signed `transcriptHash`. Read it to see exactly what evidence and prompt the model saw and what it answered.
-6. **Hardware:** verify the boot quote on [proof.t16z.com](https://proof.t16z.com) (or with `dcap-qvl`). Check that its `report_data` equals `keccak256("ai-settlement-oracle:signer:v1" ‖ signer)` and that the compose hash matches [`deploy/phala/docker-compose.yml`](deploy/phala/docker-compose.yml).
+5. **Inference enclave:** the round's TEErminator verdict must be `Verified`, and the model must be pinned (repository and revision) in the attested allowlist, whose sha256 is recorded.
+6. **Transcript:** `keccak256(GET /transcripts/:hash)` must equal the signed `transcriptHash`. The transcript shows exactly what the model saw and said, so it can be re-run on the pinned open weights.
+7. **Hardware (manual):** verify the boot quote at [proof.t16z.com](https://proof.t16z.com).
+   - Check that `report_data` equals `keccak256("ai-settlement-oracle:signer:v1" ‖ signer)`.
+   - Check that the compose hash matches [`deploy/phala/docker-compose.yml`](deploy/phala/docker-compose.yml), including its TEErminator pins.
 
 ---
 
 ## Quickstart (local)
 
-Requirements: Node 20+, [Foundry](https://book.getfoundry.sh/), and an Anthropic API key. You can use `LLM_MODE=mock` offline, but then decisions don't come from a model.
+You'll need Node 20+, [Foundry](https://book.getfoundry.sh/), and a Confidential AI API key. To get a key, email hello@confidential.ai or use [request access](https://confidential.ai/request-access). Without a key, use `LLM_MODE=anthropic` or `LLM_MODE=mock`.
 
 ```bash
 git clone --recurse-submodules https://github.com/alecwaj/AI-Settlement-Oracle && cd AI-Settlement-Oracle
@@ -139,75 +169,62 @@ npm install
 npm run build:contracts          # forge build + export ABI to oracle/ and demo/
 
 anvil                            # terminal 1: local chain
-npm run demo:deploy              # deploys with short demo timings; writes deployments/local.json
+npm run demo:deploy              # short demo timings; writes deployments/local.json
 
-cp oracle/.env.example oracle/.env   # set ANTHROPIC_API_KEY
-npm run dev:oracle               # terminal 2: oracle (TEE_MODE=dev locally; see below)
+cp oracle/.env.example oracle/.env   # set CONFIDENTIAL_API_KEY
+npm run dev:oracle               # terminal 2
 
-npm run demo:seed                # registers the oracle's signer; seeds an escalated NASA market + an open market
-npm run dev:demo                 # terminal 3: UI at http://localhost:5173
+npm run demo:seed                # registers the oracle signer; seeds an escalated NASA market + an open market
+npm run dev:demo                 # terminal 3: http://localhost:5173
 ```
 
-Then:
+Locally, the oracle runs with `TEE_MODE=dev` and `REQUIRE_ATTESTED_INFERENCE=false`. The UI shows amber and red badges so this is never mistaken for production. For the attested inference path on your machine, run TEErminator locally and set `TEERMINATOR_BIN`; see [BUILD_GUIDE §1](BUILD_GUIDE.md#attested-inference-locally-teerminator). To exercise the dstack code path, use `npx phala simulator start`.
 
-1. Open market **#1 (NASA 2025)**. It has already been proposed, disputed twice, and has three staked evidence submissions: NASA's Sep 2025 "potential biosignature" release and the Jan 2025 Bennu sample release.
-2. Click **⏩ +5 min** to close the evidence window. The watcher picks the market up within seconds, or you can click **Request AI resolution**.
-3. Read Claude's verdict, confidence, per-evidence assessment and reasoning, then click **Verify this resolution**.
-4. Walk market **#2** through the whole flow yourself: switch accounts in the *Acting as* menu to propose, dispute, propose again, dispute again (escalates), and submit evidence.
+Demo walkthrough:
 
-**Running the TEE code path locally:** start Phala's simulator (`npx phala simulator start`), then run the oracle with `TEE_MODE=dstack DSTACK_SIMULATOR_ENDPOINT=<socket printed by the simulator>`. The UI labels this *dstack simulator (not a real TEE)*, because the simulator issues quotes that aren't hardware-backed.
+1. Open market **#1 (NASA 2025)**. It has already been proposed, disputed twice, and has three staked evidence submissions: NASA's September 2025 "potential biosignature" release and its January 2025 Bennu sample release.
+2. Click **⏩ +5 min** to close the evidence window. The watcher resolves the market within seconds, or you can click **Request AI resolution**.
+3. Read the verdict, confidence, evidence assessment and reasoning. Then click **Verify this resolution**.
+4. Walk market **#2** through the full flow by switching accounts in *Acting as*.
 
-## Deploying into a TEE
+## Deploying into the TEEs
 
-The production path is a Phala Cloud CVM (Intel TDX). Full runbook: [BUILD_GUIDE.md](BUILD_GUIDE.md#3-deploy-the-oracle-into-a-tee-phala-cloud).
+The full runbook is in [BUILD_GUIDE.md §3](BUILD_GUIDE.md#3-deploy-the-oracle-into-a-tee-phala-cloud). In summary:
 
-```bash
-# 1. Deploy the contract to your chain (e.g. Base Sepolia)
-cd contracts && forge script script/Deploy.s.sol --rpc-url $RPC_URL --private-key $DEPLOYER_KEY --broadcast
-
-# 2. Build & push the oracle image (CI does this on main), then pin its digest in deploy/phala/docker-compose.yml
-docker build -f oracle/Dockerfile -t ghcr.io/<you>/ai-settlement-oracle:1.0.0 . && docker push ghcr.io/<you>/ai-settlement-oracle:1.0.0
-
-# 3. Deploy the CVM (secrets are encrypted client-side to the CVM)
-cp deploy/phala/.env.example deploy/phala/.env   # ANTHROPIC_API_KEY, RPC_URL, CONTRACT_ADDRESS
-phala login
-phala deploy -n ai-settlement-oracle -c deploy/phala/docker-compose.yml -e deploy/phala/.env --wait
-
-# 4. Fund the enclave signer (it pays gas), verify its quote, then register it
-curl https://<cvm-endpoint>/attestation      # signer, bootQuote, composeHash, tcb
-cast send $CONTRACT "registerEnclaveSigner(address,bytes32,bytes32)" <signer> <composeHash> <bootQuote.quoteHash> --private-key $OWNER_KEY --rpc-url $RPC_URL
-```
-
-The oracle refuses to start in `dstack` mode if the guest-agent socket is missing. It also refuses `LLM_MODE=mock` inside a real TEE, so an attested enclave can't sign mock decisions.
+1. Deploy `SettlementOracle` (`forge script script/Deploy.s.sol`).
+2. Get the **reviewed production pins** from Confidential AI: the MRTD, RTMR1/RTMR2, the RTMR3 seed, and the allowlist digest. Fill in the `REPLACE_WITH_…` values in [`deploy/phala/docker-compose.yml`](deploy/phala/docker-compose.yml). The container refuses to start while any placeholder remains, or if TEErminator doesn't report `Verified`.
+3. Build and push the image (CI does this on `main`), then pin its digest in the compose file.
+4. Deploy: `phala deploy -n ai-settlement-oracle -c deploy/phala/docker-compose.yml -e deploy/phala/.env --wait`
+5. Verify `GET /attestation` and `GET /inference-attestation`, fund the signer, and call `registerEnclaveSigner(signer, composeHash, quoteHash)`.
 
 ## Configuration (oracle)
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TEE_MODE` | `dstack` | `dstack` (TDX CVM or simulator) or `dev` (env key, no attestation) |
-| `ORACLE_DEV_PRIVATE_KEY` | n/a | Signing key in `dev` mode only |
-| `LLM_MODE` | `anthropic` | `anthropic` or `mock` (mock refused inside a real TEE) |
-| `ANTHROPIC_API_KEY` | n/a | Claude API key (an encrypted secret on Phala) |
-| `ANTHROPIC_MODEL` / `ANTHROPIC_EFFORT` | `claude-opus-5-5` / `high` | Arbiter model and reasoning effort |
-| `RPC_URL` | `http://127.0.0.1:8545` | Chain RPC |
-| `CONTRACT_ADDRESS` | from `deployments/local.json` | SettlementOracle address |
-| `AUTO_SUBMIT` | `true` | Submit signed resolutions on-chain from the enclave key |
-| `WATCH_INTERVAL_MS` | `15000` | Watcher poll interval |
-| `ALLOW_PRIVATE_EVIDENCE_HOSTS` | `false` | Allow evidence on localhost/private IPs (SSRF guard off) |
-| `DATA_DIR` | n/a | Persist resolution records and transcripts |
-
-Claude is called with adaptive thinking, structured outputs (a Zod schema), and server-side refusal fallbacks. Refusals and truncated outputs are rejected, never signed.
+| `TEE_MODE` | `dstack` | `dstack` (TDX CVM or simulator) or `dev` (key from env, no attestation) |
+| `LLM_MODE` | `confidential` | `confidential` (verifiable), `anthropic` (not attested), or `mock` (offline; refused in a real TEE) |
+| `CONFIDENTIAL_MODEL` | `deepseek-ai/DeepSeek-V4.1-Flash-1017` | Model ID; must be pinned in the attested allowlist |
+| `CONFIDENTIAL_API_KEY` | none | Confidential AI key (an encrypted secret on Phala) |
+| `CONFIDENTIAL_BASE_URL` | `http://127.0.0.1:8080/v1` | TEErminator local endpoint (attested). Use `https://api.confidential.ai/v1` only for unattested smoke tests. |
+| `TEERMINATOR_BIN` | `/usr/local/bin/teerminator` in the image | Used to read the gateway verdict each round |
+| `TEERMINATOR_REMOTE_ARGS` | none (set in compose) | Pins passed to `teerminator remote add` |
+| `REQUIRE_ATTESTED_INFERENCE` | `true` in a real TEE, `false` otherwise | Fail closed unless TEErminator returns `Verified` and the model is pinned |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | none / `claude-opus-5-5` | Optional, not-attested Claude mode |
+| `RPC_URL`, `CONTRACT_ADDRESS` | local anvil / `deployments/local.json` | Chain settings |
+| `AUTO_SUBMIT`, `WATCH_INTERVAL_MS`, `DATA_DIR` | `true`, `15000`, none | Submission, polling interval, persistence |
+| `ALLOW_PRIVATE_EVIDENCE_HOSTS` | `false` | Allow localhost/private-IP evidence URLs (disables the SSRF guard) |
 
 ## Oracle API
 
 | Endpoint | Description |
 |---|---|
-| `GET /health` | Signer, TEE mode, model, contract |
-| `GET /attestation` | Signer, boot TDX quote, report data, compose hash, TCB measurements, verification steps |
-| `POST /markets/:id/resolve` | Run an AI round now (the market must be escalated with its evidence window closed) |
-| `GET /markets/:id/resolutions` | All AI rounds: decision, evidence fetch results, digest, signature, quote, tx |
-| `GET /transcripts/:hash` | Exact transcript bytes whose keccak256 was signed |
-| `POST /evidence/hash` | Fetch a URL the way the oracle will and return its content hash (helper for submitters) |
+| `GET /health` | Signer, TEE mode, model, attested-inference requirement, contract |
+| `GET /attestation` | Oracle enclave: signer, boot TDX quote, report data, compose hash, TCB measurements |
+| `GET /inference-attestation` | Inference enclave, checked live: TEErminator verdict and details, allowlist sha256, model pins, discovery hash |
+| `POST /markets/:id/resolve` | Run an AI round now |
+| `GET /markets/:id/resolutions` | All AI rounds: decision, evidence, inference attestation, digest, signature, quote, transaction |
+| `GET /transcripts/:hash` | The exact transcript bytes whose keccak256 was signed |
+| `POST /evidence/hash` | Fetch a URL the way the oracle will and return its content hash |
 
 ## Contract
 
@@ -215,47 +232,45 @@ Claude is called with adaptive thinking, structured outputs (a Zod schema), and 
 
 | Function | Who | Notes |
 |---|---|---|
-| `createMarket(question, criteria, resolutionTime, thresholdBps)` | anyone | Threshold in basis points |
-| `propose(id, YES/NO)` | anyone, pays bond | After `resolutionTime` |
-| `dispute(id)` | anyone, pays bond | First dispute resets; second escalates |
-| `settle(id)` | anyone | After liveness with no dispute |
-| `submitEvidence(id, verdict, uri, contentHash)` | anyone, ≥ min stake | One per address per market; updates `submissionsHash` |
-| `resolveWithAttestation(id, outcome, confidenceBps, submissionsHash, reasoning, transcriptHash, sig)` | anyone (relayer) | Signer must be a registered enclave key; low confidence delays |
+| `createMarket(question, criteria, resolutionTime, thresholdBps)` | anyone | |
+| `propose(id, YES/NO)` / `dispute(id)` / `settle(id)` | anyone (bond) | The first dispute resets; the second escalates. |
+| `submitEvidence(id, verdict, uri, contentHash)` | anyone (≥ min stake) | One submission per address. Updates `submissionsHash`. |
+| `resolveWithAttestation(id, outcome, confidenceBps, submissionsHash, reasoning, transcriptHash, sig)` | anyone (relayer) | The signer must be a registered enclave key. Low confidence delays the market. |
 | `claim(id)` | participants | Pro-rata share of the losing pool, or a refund on `INVALID` |
-| `registerEnclaveSigner(signer, composeHash, quoteHash)` / `revokeEnclaveSigner` / `manualResolve` | owner | |
+| `registerEnclaveSigner` / `revokeEnclaveSigner` / `manualResolve` | owner | |
 
 ## Tests
 
 ```bash
-npm test     # forge test (15) + oracle vitest (10)
+npm test     # forge test (15) + oracle vitest (16)
 ```
-
-The contract tests cover the undisputed path, the single and double challenge flows, the rolling evidence hash, reward/slash math, INVALID refunds, rejection of unregistered, revoked, tampered or stale signatures, the delay → manual-pause path, and replay protection across rounds.
 
 ## Roadmap
 
-- **On-chain quote verification:** verify the TDX quote in the contract (e.g. Automata's DCAP verifier) so `registerEnclaveSigner` becomes permissionless for quotes matching an allow-listed compose hash.
-- **Full-inference attestation:** run an open-weight model in a GPU TEE (H100/B200 confidential computing), or follow ORA's opML route, so the weights themselves are attested. Keep Claude as an option when judgment quality matters more.
-- **zkTLS evidence:** let submitters attach zkTLS proofs of what a source served, as the ORA article suggests.
-- **Multi-enclave quorum:** require k-of-n independent enclaves, or models, to agree before settling.
-- **Token-denominated bonds and stakes**, an ERC-20 reward token, and the article's alternative "AI first, PoS override" mode.
-- **Testnet deployment** with a public CVM and Trust Center listing.
+- **On-chain quote verification:** verify TDX quotes in the contract, for example with Automata's DCAP verifier. That would make `registerEnclaveSigner` permissionless for allow-listed compose hashes.
+- **opML / zkML:** add ORA's fraud-proof or validity-proof path as models and provers allow. The TEE path removes operator trust today; proofs would also remove hardware trust.
+- **Per-response inference receipts:** today the inference evidence is the session attestation plus the pinned policy. Adopt per-response signatures if Confidential AI exposes them.
+- **zkTLS evidence:** let submitters attach zkTLS proofs of what a source served.
+- **Multi-model / multi-enclave quorum:** require k-of-n independent models or enclaves to agree, for example DeepSeek V4.1 together with Qwen3.8 or GLM 5.3 once capacity opens.
+- **Token-denominated bonds**, an ERC-20 reward token, and the article's alternative "AI first, PoS override" mode.
+- **Testnet deployment** with a public CVM listed on Phala's Trust Center.
 
 ## Repository layout
 
 ```
-contracts/            Foundry: SettlementOracle.sol, tests, Deploy script
-oracle/               TypeScript oracle service (runs in the TEE)
-  src/tee.ts          dstack key derivation + TDX quotes (dev-mode fallback)
-  src/resolver.ts     Claude arbiter: prompt, structured output schema
-  src/evidence.ts     In-enclave evidence fetching + hashing, SSRF guard
-  src/oracle.ts       Round orchestration, transcript, EIP-712, submission, watcher
-  src/server.ts       HTTP API
-  Dockerfile
-demo/                 React + viem UI
-deploy/phala/         docker-compose for Phala Cloud (dstack)
-scripts/              Local demo: deploy, seed, time-warp, ABI export
-NOTES.md              Original design notes and research (TEE options, trust analysis)
+contracts/                 Foundry: SettlementOracle.sol, tests, Deploy script
+oracle/                    TypeScript oracle service (runs in the TDX CVM)
+  src/tee.ts               dstack key derivation + TDX quotes (dev-mode fallback)
+  src/inference-attestation.ts  TEErminator verdict + Confidential AI allowlist/model pins
+  src/resolver.ts          Arbiter: Confidential AI (default), Anthropic, mock; prompt + schema
+  src/evidence.ts          In-enclave evidence fetching + hashing, SSRF guard
+  src/oracle.ts            Round orchestration, transcript, EIP-712, submission, watcher
+  src/server.ts            HTTP API
+  Dockerfile, docker-entrypoint.sh   Image with pinned TEErminator; refuses to start unverified
+demo/                      React + viem UI
+deploy/phala/              docker-compose for Phala Cloud (dstack), incl. TEErminator pins
+scripts/                   Local demo: deploy, seed, time-warp, ABI export
+NOTES.md                   Original design notes and research
 ```
 
 `PROMPT.md`, `claude-prompt.md` and `CLAUDE_CODE_GUIDE.md` are the original build prompts, kept for history.

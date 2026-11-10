@@ -89,7 +89,7 @@ export default function App() {
       <header className="top">
         <div>
           <h1>AI Settlement Oracle</h1>
-          <p className="muted">Optimistic resolution · double-challenge escalation · TEE-attested Claude arbiter</p>
+          <p className="muted">Optimistic resolution · double-challenge escalation · TEE-attested open-weight AI arbiter</p>
         </div>
         <TeeBadge att={att} />
       </header>
@@ -172,9 +172,28 @@ export default function App() {
 
 function TeeBadge({ att }: { att: Attestation | null }) {
   if (!att) return <span className="badge off">Oracle offline</span>;
-  if (att.mode === 'tdx') return <span className="badge ok" title={`app ${att.appId}`}>🔐 Intel TDX enclave</span>;
-  if (att.mode === 'tdx-simulator') return <span className="badge warn">🧪 dstack simulator (not a real TEE)</span>;
-  return <span className="badge bad">⚠️ Dev mode: not running in a TEE</span>;
+  const oracle =
+    att.mode === 'tdx' ? (
+      <span className="badge ok" title={`app ${att.appId}`}>🔐 Oracle: Intel TDX</span>
+    ) : att.mode === 'tdx-simulator' ? (
+      <span className="badge warn">🧪 Oracle: dstack simulator</span>
+    ) : (
+      <span className="badge bad">⚠️ Oracle: dev mode, no TEE</span>
+    );
+  const inference =
+    att.llm.provider === 'confidential' ? (
+      <span className={`badge ${att.llm.requireAttestedInference ? 'ok' : 'warn'}`} title={att.llm.gateway ?? ''}>
+        {att.llm.requireAttestedInference ? '🔐' : '🧪'} Inference: Confidential AI enclave
+      </span>
+    ) : (
+      <span className="badge bad">⚠️ Inference: {att.llm.provider}, not attested</span>
+    );
+  return (
+    <div className="row">
+      {oracle}
+      {inference}
+    </div>
+  );
 }
 
 function CreateMarket({ contract, signer, onCreated, onError }: { contract: Address; signer: Signer; onCreated: () => void; onError: (e: string) => void }) {
