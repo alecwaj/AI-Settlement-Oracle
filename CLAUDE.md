@@ -1,6 +1,6 @@
 # AI Settlement Oracle: project context for Claude Code
 
-MVP of ORA's "AI Settlement Oracle" design: an optimistic-oracle prediction market where twice-disputed markets are resolved by an AI arbiter. Verifiability comes from TEEs (chosen over opML/zkML as the most achievable route today). The oracle runs in an Intel TDX CVM (dstack / Phala Cloud). Inference runs in Confidential AI's TDX + confidential-GPU enclaves (default model `deepseek-ai/DeepSeek-V4.1-Flash-1017`), reached through the TEErminator verifying proxy. README.md has the concept, trust model and API. BUILD_GUIDE.md has the runbook.
+MVP of ORA's "AI Settlement Oracle" design: an optimistic-oracle prediction market where twice-disputed markets are resolved by an AI arbiter. Verifiability comes from TEEs. The oracle runs in an Intel TDX CVM (dstack / Phala Cloud). Inference runs in Confidential AI's TDX + confidential-GPU enclaves (default model `deepseek-ai/DeepSeek-V4.1-Flash-1017`), reached through the TEErminator verifying proxy. README.md has the concept, trust model and API. BUILD_GUIDE.md has the runbook.
 
 ## Layout
 - `contracts/`: Foundry. `src/SettlementOracle.sol` (single contract), `test/SettlementOracle.t.sol`, `script/Deploy.s.sol`. Deps are git submodules in `contracts/lib`.

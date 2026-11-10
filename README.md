@@ -6,7 +6,7 @@ This repo is a working MVP of the design in ORA's [*AI Settlement Oracle: Resolv
 
 - **What stays the same:** the optimistic-oracle flow that already works for ordinary markets.
 - **What changes:** when a market is disputed twice, the final decision moves from a token-holder vote to a verifiable AI arbiter.
-- **How it's verified:** the article proposes opML and zkML. This MVP uses trusted execution environments (TEEs) instead, because they're the most practical route to verifiable AI today.
+- **How it's verified:** trusted execution environments (TEEs). These hardware-isolated enclaves prove which code and which model weights produced each verdict, and keep the signing key out of the operator's reach.
 
 | Component | Status |
 |---|---|
@@ -43,7 +43,7 @@ The ORA design keeps the optimistic oracle for business-as-usual markets and cha
 | The protocol queries the AI oracle with all submissions | The oracle's watcher detects closed evidence windows. It fetches every evidence URL **inside the oracle enclave** and sends the criteria, verdicts and evidence to the model. |
 | A verifiable AI decides | An open-weight model running in **Confidential AI's TDX and confidential-GPU enclaves** returns `{outcome, confidence, reasoning, evidence_assessments, …}`. The oracle enclave signs the result (EIP-712), and the contract checks the signer. |
 | Verdicts matching the AI are rewarded; opposing ones are slashed | `claim()`: winners split the losing pool pro rata. An `INVALID` outcome refunds everyone. |
-| Verifiability via opML / zkML | **Two TEEs instead.** The oracle runs in an Intel TDX CVM (dstack / Phala). Its TDX quote binds the signing key to the measured code. Inference runs in Confidential AI's enclaves. TEErminator attests that upstream before any prompt is sent, and its attested policy pins the model repository, revision and weights-index hash. |
+| A verifiable AI decision-maker | **TEEs.** The oracle runs in an Intel TDX CVM (dstack / Phala). Its TDX quote binds the signing key to the measured code. Inference runs in Confidential AI's enclaves. TEErminator attests that upstream before any prompt is sent, and its attested policy pins the model repository, revision and weights-index hash. |
 | Accountability ("an AI can't be held accountable") | Below the confidence threshold, a verdict **delays** the market instead of settling it. After 3 delays the market pauses for an accountable human (`manualResolve`). |
 
 Two design choices go beyond the article, both from the project's [NOTES](NOTES.md):
@@ -141,7 +141,15 @@ What remains trusted:
 - **The contract owner**, who registers enclave signers and resolves `PausedForManual` markets. In production this should be a multisig or timelock that registers only signers whose quote matches a published compose hash.
 - **Semantic correctness.** The model can still be wrong. Mitigations are the confidence threshold, the delay mechanism, full transcripts, and reproducibility on open weights.
 
-Compared with the article's opML/zkML: a TEE gives hardware-rooted integrity today at near-native speed, on a frontier-class open model. opML (fraud proofs) and zkML (validity proofs) remove the hardware trust assumption, but don't yet scale to models of this size. They remain the long-term target (see [Roadmap](#roadmap)).
+### Why TEEs
+
+- **Verifiable today, at full model scale.** A frontier-class open model runs at near-native speed (single-digit-percent overhead) inside confidential GPUs. You don't have to shrink the model to make it verifiable.
+- **The operator can't fake a verdict.** The signing key is generated inside the enclave and never leaves it. A valid signature means the attested code produced the result, so nobody (us, the cloud host, or an attacker with root on the machine) can sign an outcome the model didn't reach.
+- **Anyone can check, with standard tools.** TDX quotes chain to Intel's root of trust and can be verified with public tools. The contract anchors the quote hash, and every resolution carries its digest, quote and transcript hash.
+- **Code and weights are both pinned.** The oracle's compose file and image digest are measured into the quote. The inference policy pins the model repository, revision and weight-index hash, so the attestation covers what ran and which model ran it.
+- **Confidentiality comes free.** API keys, prompts and evidence stay encrypted in memory. Even the infrastructure provider can't read or tamper with them while they're processed.
+- **Ordinary engineering.** It's a Docker container and a compose file. There are no circuits to build and no challenge games to run, and an upgrade is a redeploy plus re-registering the new signer.
+- **Fails closed.** If the hardware evidence, the measurements or the model pin doesn't match, the oracle signs nothing and the market waits. It never settles on unverified output.
 
 ### How a third party verifies a resolution
 
@@ -248,9 +256,9 @@ npm test     # forge test (15) + oracle vitest (16)
 ## Roadmap
 
 - **On-chain quote verification:** verify TDX quotes in the contract, for example with Automata's DCAP verifier. That would make `registerEnclaveSigner` permissionless for allow-listed compose hashes.
-- **opML / zkML:** add ORA's fraud-proof or validity-proof path as models and provers allow. The TEE path removes operator trust today; proofs would also remove hardware trust.
 - **Per-response inference receipts:** today the inference evidence is the session attestation plus the pinned policy. Adopt per-response signatures if Confidential AI exposes them.
-- **zkTLS evidence:** let submitters attach zkTLS proofs of what a source served.
+- **Single-enclave mode:** if Confidential AI exposes per-response receipts signed by an enclave key, the contract could verify inference directly and the separate oracle enclave becomes optional.
+- **Content-addressed evidence archive:** publish the exact evidence bytes the enclave fetched next to each transcript.
 - **Multi-model / multi-enclave quorum:** require k-of-n independent models or enclaves to agree, for example DeepSeek V4.1 together with Qwen3.8 or GLM 5.3 once capacity opens.
 - **Token-denominated bonds**, an ERC-20 reward token, and the article's alternative "AI first, PoS override" mode.
 - **Testnet deployment** with a public CVM listed on Phala's Trust Center.
