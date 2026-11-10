@@ -4,7 +4,7 @@ dist/
 .env.local
 deploy/phala/.env
 oracle/data/
-deployments/
+deployments/local.json
 contracts/out/
 contracts/cache/
 contracts/broadcast/

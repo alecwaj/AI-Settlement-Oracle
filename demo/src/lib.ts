@@ -15,6 +15,14 @@ import { settlementOracleAbi } from './abi';
 export const RPC_URL: string = import.meta.env.VITE_RPC_URL ?? 'http://127.0.0.1:8545';
 export const ORACLE_URL: string = import.meta.env.VITE_ORACLE_URL ?? 'http://127.0.0.1:3001';
 export const abi = settlementOracleAbi;
+export const CHAIN_NAME: string | undefined = import.meta.env.VITE_CHAIN_NAME;
+export const EXPLORER_URL: string | undefined = import.meta.env.VITE_EXPLORER_URL;
+export const DEPLOY_BLOCK: bigint = BigInt(import.meta.env.VITE_DEPLOY_BLOCK ?? 0);
+export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000' as const;
+
+export function explorerLink(kind: 'tx' | 'address', value: string): string | null {
+  return EXPLORER_URL ? `${EXPLORER_URL.replace(/\/$/, '')}/${kind}/${value}` : null;
+}
 
 export const publicClient = createPublicClient({ transport: http(RPC_URL) });
 
@@ -41,7 +49,18 @@ export async function walletFor(signer: Signer): Promise<WalletClient> {
   if (signer.kind === 'dev') return createWalletClient({ account: DEV_ACCOUNTS[signer.index], chain, transport: http(RPC_URL) });
   const eth = (window as unknown as { ethereum?: Parameters<typeof custom>[0] }).ethereum;
   if (!eth) throw new Error('No injected wallet found');
-  return createWalletClient({ account: signer.address, chain, transport: custom(eth) });
+  const wallet = createWalletClient({ account: signer.address, chain, transport: custom(eth) });
+  try {
+    await wallet.switchChain({ id: chain.id });
+  } catch {
+    await wallet.addChain({ chain }).catch(() => undefined);
+  }
+  return wallet;
+}
+
+/** Whether the current signer can send transactions (dev account, or a connected browser wallet). */
+export function canWrite(s: Signer): boolean {
+  return s.kind === 'dev' || s.address !== ZERO_ADDRESS;
 }
 
 export function signerAddress(s: Signer): Address {

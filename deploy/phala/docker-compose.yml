@@ -27,7 +27,11 @@ services:
       TEE_MODE: dstack
       LLM_MODE: confidential
       CONFIDENTIAL_MODEL: deepseek-ai/DeepSeek-V4.1-Flash-1017
-      REQUIRE_ATTESTED_INFERENCE: "true"
+      # Launch mode. "false" = UNVERIFIED inference: calls Confidential AI directly until their reviewed pins
+      # are filled in below (the UI and every resolution record say so). Once the REPLACE_WITH_ values are
+      # filled in, set this to "true": TEErminator then verifies the inference enclave before any prompt is
+      # sent, and the container refuses to start unless that check passes.
+      REQUIRE_ATTESTED_INFERENCE: "false"
       CONFIDENTIAL_UPSTREAM: https://api.confidential.ai/
       CONFIDENTIAL_PUBLIC_BASE: https://api.confidential.ai
       # Production pins for Confidential AI's front door (TEErminator `remote add` flags). Measurements are
@@ -48,6 +52,10 @@ services:
       RPC_URL: ${RPC_URL}
       CONTRACT_ADDRESS: ${CONTRACT_ADDRESS}
       AUTO_SUBMIT: "true"
+      # Public-demo safeguards for the operator's inference key.
+      MAX_AI_CALLS_PER_DAY: "50"
+      RESOLVE_RATE_LIMIT_PER_HOUR: "10"
+      ALLOWED_ORIGINS: "*"            # or your Vercel URL, e.g. https://ai-settlement-oracle.vercel.app
       WATCH_INTERVAL_MS: "15000"
       DATA_DIR: /data
 

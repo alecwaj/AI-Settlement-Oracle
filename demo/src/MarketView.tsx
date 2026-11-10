@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { formatEther, parseEther, zeroHash, type Address, type Hex } from 'viem';
 import { abi, oracle, OUTCOME, publicClient, short, signerAddress, STATUS, walletFor, type Attestation, type ResolutionRecord, type Signer } from './lib';
 import { ResolutionPanel } from './ResolutionPanel';
+import { OnchainRecord } from './OnchainRecord';
 
 export type Market = Awaited<ReturnType<typeof readMarket>>;
 async function readMarket(contract: Address, id: bigint) {
@@ -17,6 +18,7 @@ interface Props {
   id: bigint;
   market: Market;
   signer: Signer;
+  canWrite: boolean;
   chainTime: bigint;
   att: Attestation | null;
   onBack: () => void;
@@ -26,7 +28,7 @@ interface Props {
 
 const STEPS = ['Proposed', 'Disputed', 'Re-proposed', 'Disputed again → escalated', 'Evidence', 'AI arbiter', 'Resolved'];
 
-export function MarketView({ contract, id, market: m, signer, chainTime, att, onBack, onChange, onError }: Props) {
+export function MarketView({ contract, id, market: m, signer, canWrite, chainTime, att, onBack, onChange, onError }: Props) {
   const [subs, setSubs] = useState<readonly Submission[]>([]);
   const [records, setRecords] = useState<ResolutionRecord[]>([]);
   const [bond, setBond] = useState<bigint>(0n);
@@ -35,7 +37,7 @@ export function MarketView({ contract, id, market: m, signer, chainTime, att, on
   const [busy, setBusy] = useState<string | null>(null);
   const [verdict, setVerdict] = useState<1 | 2>(2);
   const [uri, setUri] = useState('');
-  const [stake, setStake] = useState('0.01');
+  const [stake, setStake] = useState('');
 
   const me = signerAddress(signer);
 
@@ -53,6 +55,7 @@ export function MarketView({ contract, id, market: m, signer, chainTime, att, on
       setSubs(s);
       setBond(b);
       setMinStake(ms);
+      setStake((cur) => cur || formatEther(ms));
       setClaimable(c);
       setRecords(r.resolutions);
     })().catch((e) => onError(e instanceof Error ? e.message : String(e)));
@@ -141,6 +144,9 @@ export function MarketView({ contract, id, market: m, signer, chainTime, att, on
       </ol>
 
       {busy && <div className="busy">{busy}</div>}
+      {!canWrite && (status === 0 || status === 1 || (status === 2 && now < m.evidenceDeadline) || (status === 3 && claimable > 0n)) && (
+        <p className="muted small">Read-only: connect a wallet (Base Sepolia) to take part. Exploring and verifying need no wallet.</p>
+      )}
 
       {/* ---- Actions by status ---- */}
       {status === 0 && (
@@ -154,10 +160,10 @@ export function MarketView({ contract, id, market: m, signer, chainTime, att, on
                 bond {formatEther(bond)} ETH. If undisputed for the liveness window, it becomes final.
               </p>
               <div className="row">
-                <button disabled={!!busy} onClick={() => tx('Propose YES', 'propose', [id, 1], bond)}>
+                <button disabled={!!busy || !canWrite} onClick={() => tx('Propose YES', 'propose', [id, 1], bond)}>
                   Propose YES
                 </button>
-                <button disabled={!!busy} onClick={() => tx('Propose NO', 'propose', [id, 2], bond)}>
+                <button disabled={!!busy || !canWrite} onClick={() => tx('Propose NO', 'propose', [id, 2], bond)}>
                   Propose NO
                 </button>
               </div>
@@ -178,7 +184,7 @@ export function MarketView({ contract, id, market: m, signer, chainTime, att, on
                 Dispute (bond {formatEther(bond)} ETH)
               </button>
             ) : (
-              <button disabled={!!busy} onClick={() => tx('Settle', 'settle', [id])}>
+              <button disabled={!!busy || !canWrite} onClick={() => tx('Settle', 'settle', [id])}>
                 Settle as {OUTCOME[m.proposedOutcome]}
               </button>
             )}
@@ -199,7 +205,7 @@ export function MarketView({ contract, id, market: m, signer, chainTime, att, on
             </select>
             <input className="grow" placeholder="https://… evidence URL" value={uri} onChange={(e) => setUri(e.target.value)} />
             <input className="narrow" value={stake} onChange={(e) => setStake(e.target.value)} title={`min ${formatEther(minStake)} ETH`} />
-            <button disabled={!!busy || !uri} onClick={submitEvidence}>
+            <button disabled={!!busy || !uri || !canWrite} onClick={submitEvidence}>
               Stake & submit
             </button>
           </div>
@@ -220,7 +226,7 @@ export function MarketView({ contract, id, market: m, signer, chainTime, att, on
           <p>The AI stayed below the confidence threshold for the maximum number of rounds. The contract owner must resolve manually.</p>
           <div className="row">
             {[1, 2, 3].map((o) => (
-              <button key={o} disabled={!!busy} onClick={() => tx('Manual resolve', 'manualResolve', [id, o])}>
+              <button key={o} disabled={!!busy || !canWrite} onClick={() => tx('Manual resolve', 'manualResolve', [id, o])}>
                 Owner: {OUTCOME[o]}
               </button>
             ))}
@@ -234,7 +240,7 @@ export function MarketView({ contract, id, market: m, signer, chainTime, att, on
             Final outcome: <b className="big">{OUTCOME[m.finalOutcome]}</b>
           </p>
           {claimable > 0n ? (
-            <button disabled={!!busy} onClick={() => tx('Claim', 'claim', [id])}>
+            <button disabled={!!busy || !canWrite} onClick={() => tx('Claim', 'claim', [id])}>
               Claim {formatEther(claimable)} ETH
             </button>
           ) : (
@@ -277,6 +283,8 @@ export function MarketView({ contract, id, market: m, signer, chainTime, att, on
           </table>
         </>
       )}
+
+      {records.length === 0 && (status === 3 || m.aiRound > 0) && <OnchainRecord contract={contract} marketId={id} />}
 
       {records.length > 0 && (
         <>
